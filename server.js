@@ -11,6 +11,7 @@ import multer from 'multer';
 import { WebSocketServer } from 'ws';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
 import { spawnPty, writePty, resizePty, capturePty, subscribePty, killPty, isPtyAlive } from './pty-manager.js';
+import { embeddedFrontend } from './frontend-embed.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // When compiled with `bun build --compile`, import.meta.url resolves into Bun's
@@ -512,7 +513,20 @@ self.addEventListener('activate', event => {
 });
 `);
 });
-app.use(express.static(path.join(ASSETS_DIR, 'frontend/dist')));
+if (embeddedFrontend) {
+  const ONE_YEAR = 60 * 60 * 24 * 365;
+  app.use((req, res, next) => {
+    const key = req.path === '/' ? '/index.html' : req.path;
+    const file = embeddedFrontend.get(key);
+    if (!file) return next();
+    const isAsset = key.startsWith('/assets/');
+    res.setHeader('Content-Type', file.mime);
+    res.setHeader('Cache-Control', isAsset ? `public, max-age=${ONE_YEAR}, immutable` : 'no-cache');
+    res.send(Buffer.from(file.data, 'base64'));
+  });
+} else {
+  app.use(express.static(path.join(ASSETS_DIR, 'frontend/dist')));
+}
 
 app.get('/api/agents', (_req, res) => {
   res.json(Object.values(AGENTS).map(a => ({
@@ -889,12 +903,21 @@ app.get('/api/events', (req, res) => {
 // ── Built-in terminal (replaces ttyd) ─────────────────────────────────────
 
 app.get('/terminal/:id', (_req, res) => {
+  if (embeddedFrontend) {
+    const file = embeddedFrontend.get('/terminal.html');
+    if (file) return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(Buffer.from(file.data, 'base64'));
+  }
   res.sendFile(path.join(ASSETS_DIR, 'terminal.html'));
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────
 
 app.get('*', (_req, res) => {
+  if (embeddedFrontend) {
+    const file = embeddedFrontend.get('/index.html');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8').send(Buffer.from(file.data, 'base64'));
+    return;
+  }
   const index = path.join(ASSETS_DIR, 'frontend/dist/index.html');
   if (fs.existsSync(index)) {
     res.sendFile(index);
