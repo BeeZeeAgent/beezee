@@ -216,8 +216,8 @@ function runServiceMac(action, bin) {
 }
 
 const app = express();
-const PORT = 4242;
-const HOME = homedir();
+const PORT = Number(process.env.PORT) || 4242;
+const HOME = process.env.HOME || homedir();
 
 const RELAY_CONFIG_PATH = path.join(HOME, '.launchpad-relay.json');
 

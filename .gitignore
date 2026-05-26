@@ -17,3 +17,5 @@ beezee-windows-*
 beezee-*.tgz
 beezee.ico
 beezee-launcher.vbs
+cloud-relay/tests/
+coverage/
