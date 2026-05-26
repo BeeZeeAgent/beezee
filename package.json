@@ -11,7 +11,8 @@
     "dev": "bun --watch server.js",
     "build:frontend": "cd frontend && npm run build",
     "build:binary": "bun build --compile server.js --outfile beezee",
-    "build": "npm run build:frontend && npm run build:binary"
+    "build": "npm run build:frontend && npm run build:binary",
+    "build:release": "npm run build:frontend && bun build --compile --target=bun-linux-arm64 server.js --outfile beezee-linux-arm64 && bun build --compile --target=bun-linux-x64 server.js --outfile beezee-linux-x64 && bun build --compile --target=bun-darwin-arm64 server.js --outfile beezee-darwin-arm64 && bun build --compile --target=bun-darwin-x64 server.js --outfile beezee-darwin-x64"
   },
   "engines": {
     "bun": ">=1.3"

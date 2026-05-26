@@ -20,6 +20,79 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   ? path.dirname(process.execPath)
   : __dirname;
 
+const BEEZEE_VERSION = '0.1.0';
+const GITHUB_REPO = 'PAndreew/launchpad';
+
+// ── CLI subcommands (runs before server starts) ────────────────────────────
+
+const [,, subcmd] = process.argv;
+
+if (subcmd === '--version' || subcmd === '-v' || subcmd === 'version') {
+  console.log(`beezee ${BEEZEE_VERSION}`);
+  process.exit(0);
+}
+
+if (subcmd === 'update') {
+  await runUpdate();
+  process.exit(0);
+}
+
+async function runUpdate() {
+  const platform = process.platform; // linux, darwin, win32
+  const arch = process.arch;         // arm64, x64
+  const assetName = `beezee-${platform}-${arch}${platform === 'win32' ? '.exe' : ''}`;
+
+  console.log(`BeeZee ${BEEZEE_VERSION} — checking for updates...`);
+
+  let release;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` },
+    });
+    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+    release = await res.json();
+  } catch (err) {
+    console.error(`Failed to fetch release info: ${err.message}`);
+    process.exit(1);
+  }
+
+  const latest = release.tag_name?.replace(/^v/, '');
+  if (!latest) { console.error('Could not parse release tag.'); process.exit(1); }
+
+  if (latest === BEEZEE_VERSION) {
+    console.log(`Already up to date (${BEEZEE_VERSION}).`);
+    return;
+  }
+
+  const asset = release.assets?.find(a => a.name === assetName);
+  if (!asset) {
+    console.error(`No binary for ${assetName} in release ${release.tag_name}.`);
+    console.error(`Available: ${(release.assets || []).map(a => a.name).join(', ')}`);
+    process.exit(1);
+  }
+
+  console.log(`Downloading ${BEEZEE_VERSION} → ${latest} (${(asset.size / 1024 / 1024).toFixed(1)} MB)...`);
+
+  const dest = process.execPath;
+  const tmp = `${dest}.new`;
+
+  let dlRes;
+  try {
+    dlRes = await fetch(asset.browser_download_url, { headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` } });
+    if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+  } catch (err) {
+    console.error(`Download error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const buf = Buffer.from(await dlRes.arrayBuffer());
+  fs.writeFileSync(tmp, buf);
+  fs.chmodSync(tmp, 0o755);
+  fs.renameSync(tmp, dest);
+
+  console.log(`Updated to ${latest}. Restart BeeZee to apply.`);
+}
+
 const app = express();
 const PORT = 4242;
 const HOME = homedir();

@@ -10,4 +10,7 @@ data/
 *.db
 *.log
 beezee
+beezee-linux-*
+beezee-darwin-*
+beezee-win32-*
 beezee-*.tgz
