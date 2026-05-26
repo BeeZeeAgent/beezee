@@ -1,27 +1,17 @@
 {
   "name": "beezee",
   "version": "0.1.0",
-  "description": "Launch and manage Claude Code and Codex sessions from any device",
-  "type": "module",
-  "bin": {
-    "beezee": "./server.js"
-  },
-  "scripts": {
-    "start": "bun server.js",
-    "dev": "bun --watch server.js",
-    "build:frontend": "cd frontend && npm run build",
-    "embed": "bun scripts/embed-frontend.js",
-    "build:binary": "npm run embed && bun build --compile server.js --outfile beezee",
-    "build": "npm run build:frontend && npm run build:binary",
-    "build:release": "npm run build:frontend && npm run embed && bun build --compile --target=bun-linux-arm64 server.js --outfile beezee-linux-arm64 && bun build --compile --target=bun-linux-x64 server.js --outfile beezee-linux-x64 && bun build --compile --target=bun-darwin-arm64 server.js --outfile beezee-darwin-arm64 && bun build --compile --target=bun-darwin-x64 server.js --outfile beezee-darwin-x64 && bun build --compile --target=bun-windows-x64 server.js --outfile beezee-windows-x64.exe"
-  },
-  "engines": {
-    "bun": ">=1.3"
-  },
   "dependencies": {
     "express": "^4.19.2",
     "multer": "^2.1.1",
     "ws": "^8.21.0"
+  },
+  "bin": {
+    "beezee": "./server.js"
+  },
+  "description": "Launch and manage Claude Code and Codex sessions from any device",
+  "engines": {
+    "bun": ">=1.3"
   },
   "keywords": [
     "claude",
@@ -30,5 +20,15 @@
     "session",
     "launcher"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "start": "bun server.js",
+    "dev": "bun --watch server.js",
+    "build:frontend": "cd frontend && npm run build",
+    "embed": "bun scripts/embed-frontend.js",
+    "build:binary": "npm run embed && bun build --compile server.js --outfile beezee",
+    "build": "npm run build:frontend && npm run build:binary",
+    "build:release": "npm run build:frontend && npm run embed && bun build --compile --target=bun-linux-arm64 server.js --outfile beezee-linux-arm64 && bun build --compile --target=bun-linux-x64 server.js --outfile beezee-linux-x64 && bun build --compile --target=bun-darwin-arm64 server.js --outfile beezee-darwin-arm64 && bun build --compile --target=bun-darwin-x64 server.js --outfile beezee-darwin-x64 && bun build --compile --target=bun-windows-x64 --icon=beezee.ico server.js --outfile beezee-windows-x64.exe"
+  },
+  "type": "module"
 }

@@ -94,6 +94,127 @@ async function runUpdate() {
   console.log(`Updated to ${latest}. Restart BeeZee to apply.`);
 }
 
+if (subcmd === 'service') {
+  const action = process.argv[3];
+  if (!['install', 'uninstall', 'start', 'stop'].includes(action)) {
+    console.log('Usage: beezee service <install|uninstall|start|stop>');
+    process.exit(1);
+  }
+  await runService(action);
+  process.exit(0);
+}
+
+async function runService(action) {
+  const bin = process.execPath;
+  const platform = process.platform;
+
+  if (platform === 'win32') {
+    await runServiceWindows(action, bin);
+  } else if (platform === 'linux') {
+    runServiceLinux(action, bin);
+  } else if (platform === 'darwin') {
+    runServiceMac(action, bin);
+  } else {
+    console.error(`Service management not supported on ${platform}.`);
+    process.exit(1);
+  }
+}
+
+function runServiceWindows(action, bin) {
+  const taskName = 'BeeZee';
+  const vbsPath = path.join(path.dirname(bin), 'beezee-launcher.vbs');
+
+  if (action === 'install') {
+    // VBScript launches the exe with window style 0 (hidden)
+    fs.writeFileSync(vbsPath,
+      `Set WShell = CreateObject("WScript.Shell")\r\n` +
+      `WShell.Run """${bin}""", 0, False\r\n`
+    );
+    spawnSync('schtasks', [
+      '/create', '/f',
+      '/tn', taskName,
+      '/tr', `wscript.exe "${vbsPath}"`,
+      '/sc', 'onlogon',
+      '/rl', 'limited',
+    ], { stdio: 'inherit' });
+    console.log(`Service installed. BeeZee will start automatically on login.`);
+    console.log(`Run now: beezee service start`);
+
+  } else if (action === 'uninstall') {
+    spawnSync('schtasks', ['/delete', '/f', '/tn', taskName], { stdio: 'inherit' });
+    try { fs.unlinkSync(vbsPath); } catch {}
+    console.log('Service removed.');
+
+  } else if (action === 'start') {
+    spawnSync('schtasks', ['/run', '/tn', taskName], { stdio: 'inherit' });
+
+  } else if (action === 'stop') {
+    spawnSync('taskkill', ['/f', '/im', path.basename(bin)], { stdio: 'inherit' });
+  }
+}
+
+function runServiceLinux(action, bin) {
+  const unitDir = path.join(homedir(), '.config', 'systemd', 'user');
+  const unitFile = path.join(unitDir, 'beezee.service');
+
+  if (action === 'install') {
+    fs.mkdirSync(unitDir, { recursive: true });
+    fs.writeFileSync(unitFile,
+      `[Unit]\nDescription=BeeZee\nAfter=network.target\n\n` +
+      `[Service]\nExecStart=${bin}\nRestart=on-failure\n\n` +
+      `[Install]\nWantedBy=default.target\n`
+    );
+    spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
+    spawnSync('systemctl', ['--user', 'enable', 'beezee'], { stdio: 'inherit' });
+    console.log('Service installed. Run: beezee service start');
+
+  } else if (action === 'uninstall') {
+    spawnSync('systemctl', ['--user', 'disable', '--now', 'beezee'], { stdio: 'inherit' });
+    try { fs.unlinkSync(unitFile); } catch {}
+    spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
+    console.log('Service removed.');
+
+  } else if (action === 'start') {
+    spawnSync('systemctl', ['--user', 'start', 'beezee'], { stdio: 'inherit' });
+
+  } else if (action === 'stop') {
+    spawnSync('systemctl', ['--user', 'stop', 'beezee'], { stdio: 'inherit' });
+  }
+}
+
+function runServiceMac(action, bin) {
+  const plistDir = path.join(homedir(), 'Library', 'LaunchAgents');
+  const plistFile = path.join(plistDir, 'com.beezee.app.plist');
+  const label = 'com.beezee.app';
+
+  if (action === 'install') {
+    fs.mkdirSync(plistDir, { recursive: true });
+    fs.writeFileSync(plistFile,
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n` +
+      `<plist version="1.0"><dict>\n` +
+      `  <key>Label</key><string>${label}</string>\n` +
+      `  <key>ProgramArguments</key><array><string>${bin}</string></array>\n` +
+      `  <key>RunAtLoad</key><true/>\n` +
+      `  <key>KeepAlive</key><true/>\n` +
+      `</dict></plist>\n`
+    );
+    spawnSync('launchctl', ['load', plistFile], { stdio: 'inherit' });
+    console.log('Service installed and started.');
+
+  } else if (action === 'uninstall') {
+    spawnSync('launchctl', ['unload', plistFile], { stdio: 'inherit' });
+    try { fs.unlinkSync(plistFile); } catch {}
+    console.log('Service removed.');
+
+  } else if (action === 'start') {
+    spawnSync('launchctl', ['start', label], { stdio: 'inherit' });
+
+  } else if (action === 'stop') {
+    spawnSync('launchctl', ['stop', label], { stdio: 'inherit' });
+  }
+}
+
 const app = express();
 const PORT = 4242;
 const HOME = homedir();

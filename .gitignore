@@ -13,4 +13,7 @@ beezee
 beezee-linux-*
 beezee-darwin-*
 beezee-win32-*
+beezee-windows-*
 beezee-*.tgz
+beezee.ico
+beezee-launcher.vbs
