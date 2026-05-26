@@ -39,9 +39,6 @@ export default function App() {
       <header className="flex items-center px-4 h-14 border-b bg-card">
         <img src="/beezee-logo.svg" alt="BeeZee" className="h-7 w-7 mr-2" />
         <h1 className="font-semibold tracking-tight">BeeZee</h1>
-        <span className="ml-2 text-xs text-muted-foreground font-mono">
-          {tab === "browse" ? "file browser" : "ai sessions"}
-        </span>
       </header>
 
       {/* Main content */}
