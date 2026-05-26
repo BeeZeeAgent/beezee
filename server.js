@@ -1,5 +1,5 @@
 import express from 'express';
-import { spawn, execSync } from 'child_process';
+import { spawn, spawnSync, execSync } from 'child_process';
 import { createServer } from 'net';
 import fs from 'fs';
 import path from 'path';
@@ -80,6 +80,69 @@ function stopSessionProcess(s, signal = 'SIGTERM') {
     if (s.proc) s.proc.kill(signal);
     else if (s.pid) process.kill(s.pid, signal);
   } catch {}
+}
+
+function tmuxCapture(sessionName) {
+  const result = spawnSync('tmux', ['capture-pane', '-p', '-t', sessionName, '-S', '-300'], { encoding: 'utf8' });
+  return result.status === 0 ? stripAnsi(result.stdout || '') : '';
+}
+
+function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd, agent }) {
+  const start = spawnSync('tmux', [
+    'new-session',
+    '-d',
+    '-s',
+    session.tmuxSession,
+    '-c',
+    cwd,
+    `claude --resume '${String(resumeId).replace(/'/g, `'\\''`)}'`,
+  ], { encoding: 'utf8' });
+
+  if (start.status !== 0) {
+    session.status = 'error';
+    session.log.push(start.stderr || start.stdout || 'Failed to start tmux session');
+    return;
+  }
+
+  setTimeout(() => {
+    spawnSync('tmux', ['send-keys', '-t', session.tmuxSession, `/remote-control ${remoteName}`, 'Enter']);
+  }, 4000);
+
+  let attempts = 0;
+  const timer = setInterval(() => {
+    const s = sessions.get(id);
+    if (!s) {
+      clearInterval(timer);
+      return;
+    }
+
+    const pane = tmuxCapture(s.tmuxSession);
+    if (pane) {
+      s.log = [pane];
+      s.lastActivityAt = Date.now();
+    }
+
+    const match = pane.match(agent.urlPattern);
+    if (match) {
+      s.url = match[0].replace(/[.,;:)\]]+$/, '');
+      s.status = 'running';
+      broadcast({ type: 'session_update', session: sanitize(s) });
+      clearInterval(timer);
+      return;
+    }
+
+    attempts += 1;
+    const tmuxAlive = spawnSync('tmux', ['has-session', '-t', s.tmuxSession], { stdio: 'ignore' }).status === 0;
+    if (!tmuxAlive || attempts > 30) {
+      s.status = 'error';
+      if (!pane) s.log.push('Claude resume remote-control did not produce a URL.');
+      broadcast({ type: 'session_update', session: sanitize(s) });
+      clearInterval(timer);
+      return;
+    }
+
+    broadcast({ type: 'session_update', session: sanitize(s) });
+  }, 1000);
 }
 
 function recoverTtydSessions() {
@@ -346,9 +409,36 @@ app.post('/api/sessions', async (req, res) => {
   let cmd, args, mode, immediateUrl, tmuxSession = null;
 
   if (resumeId && tool === 'claude' && agent.nativeAvailable()) {
-    cmd = agent.nativeBin();
-    args = agent.nativeArgs(name || `Resume ${String(resumeId).slice(0, 8)}`);
-    mode = 'native';
+    if (!which('tmux')) {
+      return res.status(503).json({ error: 'tmux not found — install it to resume Claude sessions into Remote Control' });
+    }
+    const id = nextId++;
+    tmuxSession = `lp-claude-${Date.now()}-${id}`;
+    const session = {
+      id,
+      tool,
+      name: name || `Resume ${String(resumeId).slice(0, 8)}`,
+      cwd: workDir,
+      status: 'starting',
+      url: null,
+      mode: 'native',
+      tmuxSession,
+      pid: 0,
+      log: [`Starting Claude resume ${resumeId} and attaching /remote-control...\n`],
+      startedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    sessions.set(id, session);
+    startClaudeResumeRemoteSession({
+      id,
+      session,
+      resumeId,
+      remoteName: name || `Resume ${String(resumeId).slice(0, 8)}`,
+      cwd: workDir,
+      agent,
+    });
+    res.json(sanitize(session));
+    return;
   } else if (resumeId) {
     if (!which('ttyd')) {
       return res.status(503).json({ error: 'ttyd not found — install it to resume stored sessions' });
