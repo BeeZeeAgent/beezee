@@ -9,3 +9,5 @@ data/
 *.sqlite
 *.db
 *.log
+cloud-relay/tests/
+coverage/

@@ -8,7 +8,7 @@ import multer from 'multer';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
 
 const app = express();
-const PORT = 4242;
+const PORT = Number(process.env.PORT) || 4242;
 const HOME = process.env.HOME || '/home/pi';
 
 const RELAY_CONFIG_PATH = path.join(HOME, '.launchpad-relay.json');
