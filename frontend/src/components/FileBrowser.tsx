@@ -91,6 +91,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
 
   const pathParts = currentPath.split("/").filter(Boolean);
   const isDeepSearch = query.length >= 2;
+  const truncPath = (p: string, n = 36) => p.length <= n ? p : "…" + p.slice(-(n - 1));
 
   return (
     <div className="flex flex-col h-full">
@@ -185,13 +186,46 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
                     <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => navigate(result.path)}>
                       <p className="text-sm truncate">{result.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{result.path}</p>
+                      <p className="text-xs text-muted-foreground">{truncPath(result.path)}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
-                      <Button size="sm" className="h-7 px-2.5 text-xs shrink-0" style={{ background: "#FFE566", color: "#000", border: "none" }} onClick={() => onLaunch(result.path)}>
-                        <Rocket className="h-3 w-3 mr-1" />Launch
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="Open folder" onClick={() => navigate(result.path)}>
+                      <div className="relative">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="Upload to this folder"
+                          disabled={uploading}
+                          onClick={(e) => { e.stopPropagation(); setUploadDropdown(uploadDropdown === result.path ? null : result.path); }}
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                        </Button>
+                        {uploadDropdown === result.path && (
+                          <div className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-md shadow-md py-1 min-w-[148px]">
+                            <button
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent text-left"
+                              onClick={() => openUpload(result.path, "files")}
+                            >
+                              <Files className="h-3.5 w-3.5 text-muted-foreground" />
+                              Upload files
+                            </button>
+                            <button
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent text-left"
+                              onClick={() => openUpload(result.path, "folder")}
+                            >
+                              <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />
+                              Upload folder
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        title="Open folder"
+                        onClick={() => navigate(result.path)}
+                      >
                         <ChevronRight className="h-3.5 w-3.5" />
                       </Button>
                     </div>

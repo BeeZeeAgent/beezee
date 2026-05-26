@@ -8,9 +8,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { networkInterfaces, homedir } from 'os';
 import multer from 'multer';
-import { WebSocketServer } from 'ws';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
-import { spawnPty, writePty, resizePty, capturePty, subscribePty, killPty, isPtyAlive } from './pty-manager.js';
+import { spawnPty, writePty, resizePty, refreshPty, capturePty, subscribePty, killPty, isPtyAlive } from './pty-manager.js';
 import { embeddedFrontend } from './frontend-embed.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -264,6 +263,25 @@ function getLocalIPs() {
   return results;
 }
 
+function getTailscaleIP() {
+  const nets = networkInterfaces();
+  for (const iface of Object.values(nets)) {
+    for (const net of iface) {
+      if (net.family === 'IPv4' && net.address.startsWith('100.')) return net.address;
+    }
+  }
+  return null;
+}
+
+function getTerminalUrl(id) {
+  if (relayConfig.url && relayConfig.token && relayConfig.nodeId) {
+    return `${relayConfig.url}/i/${relayConfig.nodeId}/terminal/${id}`;
+  }
+  const tsIP = getTailscaleIP();
+  const ip = tsIP || getLocalIPs()[0] || 'localhost';
+  return `http://${ip}:${PORT}/terminal/${id}`;
+}
+
 function getFreePort() {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -411,16 +429,24 @@ function startCloudRelayConnector() {
           headers: Object.fromEntries(Object.entries(msg.headers || {}).filter(([, value]) => value)),
           body: ['GET', 'HEAD'].includes(msg.method) ? undefined : body,
         });
-        const responseBody = Buffer.from(await response.arrayBuffer());
         const headers = {};
         response.headers.forEach((value, key) => { headers[key] = value; });
-        ws.send(JSON.stringify({
-          type: 'proxy_response',
-          id: msg.id,
-          status: response.status,
-          headers,
-          body_b64: responseBody.toString('base64'),
-        }));
+        const contentType = headers['content-type'] || '';
+        if (contentType.includes('text/event-stream') && response.body) {
+          ws.send(JSON.stringify({ type: 'proxy_response', id: msg.id, status: response.status, headers }));
+          const reader = response.body.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              ws.send(JSON.stringify({ type: 'proxy_chunk', id: msg.id, data_b64: Buffer.from(value).toString('base64') }));
+            }
+          } catch {}
+          ws.send(JSON.stringify({ type: 'proxy_stream_end', id: msg.id }));
+        } else {
+          const responseBody = Buffer.from(await response.arrayBuffer());
+          ws.send(JSON.stringify({ type: 'proxy_response', id: msg.id, status: response.status, headers, body_b64: responseBody.toString('base64') }));
+        }
       } catch (err) {
         ws.send(JSON.stringify({
           type: 'proxy_response',
@@ -827,11 +853,10 @@ app.post('/api/sessions', async (req, res) => {
     return;
   }
 
-  // ── Terminal (browser) session — PTY streamed via WebSocket terminal ──
+  // ── Terminal (browser) session — PTY streamed via SSE terminal ──
   if (resumeId || !agent.nativeAvailable()) {
     const id = nextId++;
-    const ip = getLocalIPs()[0] || 'localhost';
-    const termUrl = `http://${ip}:${PORT}/terminal/${id}`;
+    const termUrl = getTerminalUrl(id);
     const resumeArgs = resumeId
       ? (tool === 'codex' ? ['resume', String(resumeId)] : ['--resume', String(resumeId)])
       : [];
@@ -1021,7 +1046,7 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => sseClients.delete(res));
 });
 
-// ── Built-in terminal (replaces ttyd) ─────────────────────────────────────
+// ── Built-in terminal ─────────────────────────────────────────────────────
 
 app.get('/terminal/:id', (_req, res) => {
   if (embeddedFrontend) {
@@ -1029,6 +1054,38 @@ app.get('/terminal/:id', (_req, res) => {
     if (file) return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(Buffer.from(file.data, 'base64'));
   }
   res.sendFile(path.join(ASSETS_DIR, 'terminal.html'));
+});
+
+app.get('/terminal/:id/stream', (req, res) => {
+  const sessionId = Number(req.params.id);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(':\n\n');
+  const unsub = subscribePty(sessionId, data => {
+    if (!res.writableEnded) {
+      res.write(`data: ${Buffer.from(data).toString('base64')}\n\n`);
+    }
+  });
+  refreshPty(sessionId);
+  req.on('close', unsub);
+});
+
+app.post('/terminal/:id/input', express.raw({ type: '*/*' }), (req, res) => {
+  const sessionId = Number(req.params.id);
+  if (req.body?.length) writePty(sessionId, req.body.toString());
+  res.json({ ok: true });
+});
+
+app.post('/terminal/:id/resize', (req, res) => {
+  const sessionId = Number(req.params.id);
+  const cols = Number(req.body?.cols);
+  const rows = Number(req.body?.rows);
+  if (cols && rows) resizePty(sessionId, cols, rows);
+  res.json({ ok: true });
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────
@@ -1065,35 +1122,6 @@ setInterval(() => {
 }, 2 * 60 * 1000);
 
 const httpServer = createHttpServer(app);
-
-// ── WebSocket terminal ─────────────────────────────────────────────────────
-
-const wss = new WebSocketServer({ noServer: true });
-
-httpServer.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/ws/terminal/')) {
-    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
-  } else {
-    socket.destroy();
-  }
-});
-
-wss.on('connection', (ws, req) => {
-  const sessionId = Number(req.url.split('/').pop());
-  const unsub = subscribePty(sessionId, data => {
-    if (ws.readyState === 1) ws.send(data);
-  });
-  ws.on('message', msg => {
-    const text = msg.toString();
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed.type === 'resize') { resizePty(sessionId, parsed.cols, parsed.rows); return; }
-    } catch {}
-    writePty(sessionId, text);
-  });
-  ws.on('close', unsub);
-  ws.on('error', unsub);
-});
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();

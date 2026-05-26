@@ -23,6 +23,11 @@ const STATUS_COLORS: Record<Session["status"], string> = {
   error: "bg-red-500/15 text-red-600 border-red-500/30",
 };
 
+function truncCwd(p: string) {
+  if (p.length <= 20) return p;
+  return p.slice(0, 5) + "…" + p.slice(-10);
+}
+
 export function SessionCard({ session, onRemove }: SessionCardProps) {
   const [showLog, setShowLog] = useState(false);
   const [log, setLog] = useState<string[]>([]);
@@ -89,7 +94,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
                   terminal
                 </Badge>
               )}
-              <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">{session.cwd}</span>
+              <span className="flex-1 min-w-0 text-xs text-muted-foreground font-mono" title={session.cwd}>{truncCwd(session.cwd)}</span>
               <span className="text-xs text-muted-foreground shrink-0">{elapsedStr}</span>
             </div>
           </div>

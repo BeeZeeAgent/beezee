@@ -21,7 +21,12 @@
   <div id="terminal"></div>
   <div id="status">connecting…</div>
   <script>
-    const sessionId = window.location.pathname.split('/').pop();
+    // Parse the path prefix and session ID from the current URL.
+    // Direct:  /terminal/1              → prefix="",               sessionId="1"
+    // Relay:   /i/tenant-default/terminal/1 → prefix="/i/tenant-default", sessionId="1"
+    const m = window.location.pathname.match(/^(.*?)\/terminal\/(\d+)/);
+    const prefix = m ? m[1] : '';
+    const sessionId = m ? m[2] : window.location.pathname.split('/').pop();
     const status = document.getElementById('status');
 
     const term = new Terminal({
@@ -41,42 +46,55 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
 
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${proto}://${location.host}/ws/terminal/${sessionId}`;
-    let ws;
+    let inputQueue = Promise.resolve();
+
+    function sendInput(data) {
+      const body = new TextEncoder().encode(data);
+      inputQueue = inputQueue.then(() =>
+        fetch(`${prefix}/terminal/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body,
+        }).catch(() => {})
+      );
+    }
+
+    function sendResize() {
+      fetch(`${prefix}/terminal/${sessionId}/resize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+      }).catch(() => {});
+    }
 
     function connect() {
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
+      const es = new EventSource(`${prefix}/terminal/${sessionId}/stream`);
 
-      ws.onopen = () => {
+      es.onopen = () => {
         status.textContent = 'connected';
         sendResize();
       };
 
-      ws.onmessage = ({ data }) => {
-        if (data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(data));
-        } else {
-          term.write(data);
-        }
+      es.onmessage = (e) => {
+        try {
+          const bytes = Uint8Array.from(atob(e.data), c => c.charCodeAt(0));
+          term.write(bytes);
+        } catch {}
       };
 
-      ws.onclose = () => { status.textContent = 'disconnected — reload to reconnect'; };
-      ws.onerror = () => { status.textContent = 'connection error'; };
+      es.onerror = () => {
+        status.textContent = 'disconnected — reconnecting…';
+        es.close();
+        setTimeout(connect, 2000);
+      };
     }
 
-    function sendResize() {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-      }
-    }
+    term.onData(data => sendInput(data));
 
-    term.onData(data => {
-      if (ws && ws.readyState === 1) ws.send(data);
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      sendResize();
     });
-
-    window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
 
     connect();
   </script>

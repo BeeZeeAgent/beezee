@@ -279,7 +279,8 @@ export function listAgentSessions() {
     const row = bySource.get(`${sourceAgent}:${sourceId}`);
     if (!row) continue;
     if (!row.agents.includes(targetAgent)) row.agents.push(targetAgent);
-    row.agentSessions[targetAgent] = path.basename(state.mirrors[key].targetFile || '', '.jsonl');
+    row.agentSessions[targetAgent] = state.mirrors[key].mirroredSessionId
+      || uuidFrom(`${sourceAgent}:${sourceId}:${targetAgent}`);
   }
   return [...byTitle.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -312,7 +313,8 @@ export function runSessionSync() {
           if (fs.existsSync(targetFile) && previousMtime >= source.updatedAt) continue;
           if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
           appendJsonl(targetFile, targetSchema.toRecords(source));
-          state.mirrors[key] = { sourceFile: file, sourceMtime: source.updatedAt, targetFile };
+          const mirroredSessionId = uuidFrom(`${sourceAgentId}:${source.id}:${targetAgentId}`);
+          state.mirrors[key] = { sourceFile: file, sourceMtime: source.updatedAt, targetFile, mirroredSessionId };
           synced += 1;
         }
       }
