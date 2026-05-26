@@ -42,7 +42,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
 
   const handleStop = async () => {
     await api.pauseSession(session.id);
-    setLog(prev => prev.length ? [...prev, "[launchpad] Session paused\n"] : prev);
+    setLog(prev => prev.length ? [...prev, "[beezee] Session paused\n"] : prev);
   };
 
   const handleDelete = async () => {

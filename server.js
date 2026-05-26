@@ -16,9 +16,9 @@ function loadRelayConfig() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(RELAY_CONFIG_PATH, 'utf8')); } catch {}
   return {
-    url: process.env.LAUNCHPAD_RELAY_URL || saved.url || '',
-    nodeId: process.env.LAUNCHPAD_RELAY_NODE_ID || saved.nodeId || 'launchpad-local',
-    token: process.env.LAUNCHPAD_RELAY_TOKEN || saved.token || '',
+    url: process.env.BEEZEE_RELAY_URL || process.env.LAUNCHPAD_RELAY_URL || saved.url || '',
+    nodeId: process.env.BEEZEE_RELAY_NODE_ID || process.env.LAUNCHPAD_RELAY_NODE_ID || saved.nodeId || 'beezee-local',
+    token: process.env.BEEZEE_RELAY_TOKEN || process.env.LAUNCHPAD_RELAY_TOKEN || saved.token || '',
   };
 }
 
