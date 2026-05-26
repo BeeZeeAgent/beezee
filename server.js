@@ -21,7 +21,7 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   : __dirname;
 
 const BEEZEE_VERSION = '0.1.0';
-const GITHUB_REPO = 'PAndreew/launchpad';
+const GITHUB_REPO = 'BeezeeAgent/beezee';
 
 // ── CLI subcommands (runs before server starts) ────────────────────────────
 
