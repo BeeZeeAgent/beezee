@@ -20,7 +20,7 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   ? path.dirname(process.execPath)
   : __dirname;
 
-const BEEZEE_VERSION = '0.2.0';
+const BEEZEE_VERSION = '0.3.0';
 const GITHUB_REPO = 'BeeZeeAgent/beezee';
 
 // ── CLI subcommands (runs before server starts) ────────────────────────────
