@@ -4,6 +4,7 @@ import { createServer } from 'net';
 import fs from 'fs';
 import path from 'path';
 import { networkInterfaces } from 'os';
+import multer from 'multer';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
 
 const app = express();
@@ -355,6 +356,29 @@ app.get('/api/browse', (req, res) => {
     res.json({ path: dir, parent: path.dirname(dir), items });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+const _uploadMulter = multer({ dest: path.join(HOME, '.beezee-upload-tmp') });
+
+app.post('/api/upload', _uploadMulter.array('files'), (req, res) => {
+  const tempFiles = req.files || [];
+  try {
+    const dest = path.resolve(String(req.query.dest || HOME));
+    const relPaths = [].concat(req.body.paths || []);
+    for (let i = 0; i < tempFiles.length; i++) {
+      const file = tempFiles[i];
+      const relPath = relPaths[i] || file.originalname;
+      const target = path.resolve(dest, relPath);
+      if (!target.startsWith(dest + path.sep)) { fs.unlinkSync(file.path); continue; }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      try { fs.renameSync(file.path, target); }
+      catch { fs.copyFileSync(file.path, target); fs.unlinkSync(file.path); }
+    }
+    res.json({ ok: true, count: tempFiles.length });
+  } catch (e) {
+    for (const f of tempFiles) { try { fs.unlinkSync(f.path); } catch {} }
+    res.status(500).json({ error: e.message });
   }
 });
 

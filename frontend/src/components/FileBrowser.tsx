@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { ChevronRight, FolderOpen, File, Home, ArrowLeft, Rocket, Search, X } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { ChevronRight, FolderOpen, File, Home, ArrowLeft, Rocket, Search, X, Upload, Files, FolderInput } from "lucide-react";
 import { api, type BrowseItem } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,10 +20,20 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadDropdown, setUploadDropdown] = useState<string | null>(null);
+  const [uploadTarget, setUploadTarget] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const filesRef = useRef<HTMLInputElement>(null);
+  const folderRef = useCallback((el: HTMLInputElement | null) => {
+    if (el) el.setAttribute("webkitdirectory", "");
+  }, []);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const navigate = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
+    setUploadDropdown(null);
     try {
       const result = await api.browse(path);
       setCurrentPath(result.path);
@@ -39,6 +49,27 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
 
   useEffect(() => { navigate(HOME); }, [navigate]);
 
+  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !uploadTarget) return;
+    setUploading(true);
+    try {
+      const relativePaths = files.map(f => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name);
+      await api.upload(uploadTarget, files, relativePaths);
+      if (uploadTarget === currentPath) navigate(currentPath);
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }, [uploadTarget, currentPath, navigate]);
+
+  const openUpload = (dest: string, type: "files" | "folder") => {
+    setUploadTarget(dest);
+    setUploadDropdown(null);
+    if (type === "files") filesRef.current?.click();
+    else folderInputRef.current?.click();
+  };
+
   const pathParts = currentPath.split("/").filter(Boolean);
   const normalizedQuery = query.trim().toLowerCase();
   const filteredItems = normalizedQuery
@@ -48,6 +79,10 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Hidden file inputs */}
+      <input ref={filesRef} type="file" multiple hidden onChange={handleUpload} />
+      <input ref={(el) => { (folderInputRef as React.MutableRefObject<HTMLInputElement | null>).current = el; folderRef(el); }} type="file" multiple hidden onChange={handleUpload} />
+
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 px-4 py-3 border-b overflow-x-auto">
         <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => navigate(HOME)}>
@@ -108,6 +143,11 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
         </div>
       </div>
 
+      {/* Dropdown backdrop */}
+      {uploadDropdown && (
+        <div className="fixed inset-0 z-10" onClick={() => setUploadDropdown(null)} />
+      )}
+
       {/* File list */}
       <ScrollArea className="flex-1">
         {loading && (
@@ -146,14 +186,11 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
               </p>
             )}
             {filteredItems.map((item) => (
-              <button
+              <div
                 key={item.path}
-                onClick={() => item.isDir && navigate(item.path)}
                 className={cn(
-                  "w-full flex items-center gap-3 px-4 py-2.5 transition-colors",
-                  item.isDir
-                    ? "hover:bg-accent cursor-pointer"
-                    : "cursor-default opacity-60"
+                  "flex items-center gap-3 px-4 py-2.5 transition-colors",
+                  item.isDir ? "hover:bg-accent" : "opacity-60"
                 )}
               >
                 {item.isDir ? (
@@ -161,9 +198,60 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
                 ) : (
                   <File className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
-                <span className="text-sm truncate text-left">{item.name}</span>
-                {item.isDir && <ChevronRight className="h-3.5 w-3.5 ml-auto shrink-0 text-muted-foreground" />}
-              </button>
+                <span
+                  className={cn("text-sm truncate text-left flex-1 min-w-0", item.isDir && "cursor-pointer")}
+                  onClick={() => item.isDir && navigate(item.path)}
+                >
+                  {item.name}
+                </span>
+
+                {item.isDir && (
+                  <div className="flex items-center gap-0.5 shrink-0 relative">
+                    {/* Upload dropdown */}
+                    <div className="relative">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        title="Upload to this folder"
+                        disabled={uploading}
+                        onClick={(e) => { e.stopPropagation(); setUploadDropdown(uploadDropdown === item.path ? null : item.path); }}
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                      </Button>
+                      {uploadDropdown === item.path && (
+                        <div className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-md shadow-md py-1 min-w-[148px]">
+                          <button
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent text-left"
+                            onClick={() => openUpload(item.path, "files")}
+                          >
+                            <Files className="h-3.5 w-3.5 text-muted-foreground" />
+                            Upload files
+                          </button>
+                          <button
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent text-left"
+                            onClick={() => openUpload(item.path, "folder")}
+                          >
+                            <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />
+                            Upload folder
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Navigate button */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Open folder"
+                      onClick={() => navigate(item.path)}
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}

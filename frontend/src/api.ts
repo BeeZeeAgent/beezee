@@ -99,6 +99,15 @@ export const api = {
   relayStatus: (): Promise<{ configured: boolean; url: string; nodeId: string }> =>
     fetch(`${BASE}/api/relay/status`).then(r => r.json()),
 
+  upload: (dest: string, files: File[], relativePaths: string[]): Promise<{ ok: boolean; count: number }> => {
+    const form = new FormData();
+    files.forEach((f, i) => {
+      form.append('files', f);
+      form.append('paths', relativePaths[i] || f.name);
+    });
+    return fetch(`${BASE}/api/upload?dest=${encodeURIComponent(dest)}`, { method: 'POST', body: form }).then(r => r.json());
+  },
+
   relayPair: (code: string, relayUrl: string): Promise<{ ok: boolean; instanceName: string }> =>
     fetch(`${BASE}/api/relay/pair`, {
       method: 'POST',
