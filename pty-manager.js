@@ -10,7 +10,10 @@ const IS_WIN = process.platform === 'win32';
 
 function checkPython3() {
   try {
-    const r = spawnSync('python3', ['-c', 'import pty, os, fcntl, termios'], { timeout: 3000 });
+    const r = spawnSync('python3', ['-c', 'import pty, os, fcntl, termios'], {
+      timeout: 3000,
+      windowsHide: true,
+    });
     return r.status === 0;
   } catch { return false; }
 }
@@ -122,6 +125,7 @@ export function spawnPty(id, cmd, args, { cwd, env, cols = 220, rows = 50 } = {}
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
+      windowsHide: IS_WIN,
       cwd,
       env: {
         ...process.env,
@@ -136,6 +140,7 @@ export function spawnPty(id, cmd, args, { cwd, env, cols = 220, rows = 50 } = {}
       stdin: 'pipe',
       stdout: 'pipe',
       tty: true,
+      windowsHide: IS_WIN,
       cwd,
       env: {
         ...process.env,
@@ -189,7 +194,7 @@ export function resizePty(id, cols, rows) {
   } else {
     try {
       spawnSync('stty', ['-F', `/proc/${entry.proc.pid}/fd/0`, 'cols', String(cols), 'rows', String(rows)],
-        { stdio: 'ignore', timeout: 500 });
+        { stdio: 'ignore', timeout: 500, windowsHide: true });
     } catch {}
     try { process.kill(entry.proc.pid, 'SIGWINCH'); } catch {}
   }

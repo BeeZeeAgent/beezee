@@ -20,7 +20,7 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   ? path.dirname(process.execPath)
   : __dirname;
 
-const BEEZEE_VERSION = '0.3.0';
+const BEEZEE_VERSION = '0.4.0';
 const GITHUB_REPO = 'BeeZeeAgent/beezee';
 
 // ── CLI subcommands (runs before server starts) ────────────────────────────
@@ -138,12 +138,12 @@ function runServiceWindows(action, bin) {
     console.log('Service removed from startup folder.');
 
   } else if (action === 'start') {
-    const child = spawn(bin, [], { detached: true, stdio: 'ignore' });
+    const child = spawn(bin, [], { detached: true, stdio: 'ignore', windowsHide: true });
     child.unref();
     console.log('BeeZee started in background.');
 
   } else if (action === 'stop') {
-    spawnSync('taskkill', ['/f', '/im', path.basename(bin)], { stdio: 'inherit' });
+    spawnSync('taskkill', ['/f', '/im', path.basename(bin)], { stdio: 'inherit', windowsHide: true });
   }
 }
 
@@ -289,7 +289,7 @@ const IS_WIN = process.platform === 'win32';
 
 function which(bin) {
   const cmd = IS_WIN ? `where "${bin}"` : `which ${bin}`;
-  try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split(/\r?\n/)[0] || null; } catch { return null; }
+  try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).toString().trim().split(/\r?\n/)[0] || null; } catch { return null; }
 }
 
 function readUsageStats() {
@@ -322,6 +322,173 @@ function stopSessionProcess(s, signal = IS_WIN ? 'SIGKILL' : 'SIGTERM') {
   } catch {}
 }
 
+function isClaudeWorkspaceTrustError(text) {
+  return /Workspace not trusted/i.test(text);
+}
+
+function beginClaudeTrustTerminal({ id, session, cwd, onTrusted }) {
+  try {
+    if (session.proc) session.proc.kill(IS_WIN ? 'SIGKILL' : 'SIGTERM');
+  } catch {}
+  delete session.proc;
+  if (session.ptyId != null) {
+    try { killPty(session.ptyId); } catch {}
+  }
+
+  let pid;
+  try {
+    pid = spawnPty(id, 'claude', [], {
+      cwd,
+      env: { TERM: 'xterm-256color' },
+    });
+  } catch (e) {
+    session.status = 'error';
+    session.log.push(`Failed to open Claude trust terminal: ${e.message}\n`);
+    broadcast({ type: 'session_update', session: sanitize(session) });
+    return;
+  }
+
+  session.mode = 'ttyd';
+  session.url = getTerminalUrl(id);
+  session.ptyId = id;
+  session.pid = pid;
+  session.status = 'running';
+  session.lastActivityAt = Date.now();
+  session.log.push(
+    '[beezee] Claude needs this workspace trusted before remote-control can start.\n' +
+    '[beezee] Open the terminal, accept the Claude trust prompt, then exit Claude. BeeZee will retry remote-control automatically.\n'
+  );
+  if (session.log.length > 300) session.log.splice(0, session.log.length - 300);
+  broadcast({ type: 'session_update', session: sanitize(session) });
+
+  const timer = setInterval(() => {
+    const s = sessions.get(id);
+    if (!s) { clearInterval(timer); return; }
+    if (isPtyAlive(id)) return;
+
+    clearInterval(timer);
+    killPty(id);
+    s.ptyId = null;
+    s.url = null;
+    s.mode = 'native';
+    s.status = 'starting';
+    s.lastActivityAt = Date.now();
+    s.log.push('[beezee] Trust terminal closed. Retrying Claude remote-control...\n');
+    if (s.log.length > 300) s.log.splice(0, s.log.length - 300);
+    broadcast({ type: 'session_update', session: sanitize(s) });
+    onTrusted(s);
+  }, 1000);
+}
+
+function startNativeRemoteSession({ id, tool, agent, name, cwd, allowTrustFallback = true }) {
+  const cmd = agent.nativeBin();
+  const args = agent.nativeArgs(name);
+  const s = sessions.get(id);
+  if (!s) return null;
+
+  let proc;
+  try {
+    proc = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '0', NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+  } catch (e) {
+    if (tool === 'codex') {
+      codexSessionCount = Math.max(0, codexSessionCount - 1);
+      if (codexSessionCount === 0) setCodexProxyConfig(false);
+    }
+    s.status = 'error';
+    s.log.push(`Failed to start ${agent.label}: ${e.message}\n`);
+    broadcast({ type: 'session_update', session: sanitize(s) });
+    return null;
+  }
+
+  s.proc = proc;
+  s.pid = proc.pid;
+  s.mode = 'native';
+  s.status = 'starting';
+  s.url = null;
+  s.ptyId = null;
+  s.lastActivityAt = Date.now();
+  broadcast({ type: 'session_update', session: sanitize(s) });
+
+  const handleData = (chunk) => {
+    const text = stripAnsi(chunk.toString());
+    const current = sessions.get(id);
+    if (!current || current.proc !== proc) return;
+
+    current.lastActivityAt = Date.now();
+    current.log.push(text);
+    if (current.log.length > 300) current.log.shift();
+
+    if (tool === 'claude' && allowTrustFallback && isClaudeWorkspaceTrustError(text)) {
+      beginClaudeTrustTerminal({
+        id,
+        session: current,
+        cwd,
+        onTrusted: () => startNativeRemoteSession({ id, tool, agent, name, cwd, allowTrustFallback: false }),
+      });
+      return;
+    }
+
+    if (!current.url) {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const json = JSON.parse(trimmed);
+          const url = json.url || json.relay_url || json.connection_url;
+          if (url) {
+            current.url = url;
+            current.status = 'running';
+            broadcast({ type: 'session_update', session: sanitize(current) });
+            return;
+          }
+        } catch {}
+        const match = trimmed.match(agent.urlPattern);
+        if (match) {
+          current.url = match[0].replace(/[.,;:)\]]+$/, '');
+          current.status = 'running';
+          broadcast({ type: 'session_update', session: sanitize(current) });
+          return;
+        }
+      }
+    }
+
+    broadcast({ type: 'session_update', session: sanitize(current) });
+  };
+
+  proc.stdout.on('data', handleData);
+  proc.stderr.on('data', handleData);
+
+  proc.on('error', (err) => {
+    const current = sessions.get(id);
+    if (current && current.proc === proc) {
+      current.status = 'error';
+      current.log.push(`Error: ${err.message}`);
+      broadcast({ type: 'session_update', session: sanitize(current) });
+    }
+  });
+
+  proc.on('exit', (code) => {
+    if (tool === 'codex') {
+      codexSessionCount = Math.max(0, codexSessionCount - 1);
+      if (codexSessionCount === 0) setCodexProxyConfig(false);
+    }
+    const current = sessions.get(id);
+    if (current && current.proc === proc) {
+      current.status = 'stopped';
+      current.exitCode = code;
+      delete current.proc;
+      broadcast({ type: 'session_update', session: sanitize(current) });
+    }
+  });
+
+  return proc;
+}
+
 function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd, agent }) {
   let pid;
   try {
@@ -346,6 +513,17 @@ function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd
     if (output) {
       s.log = [output];
       s.lastActivityAt = Date.now();
+    }
+
+    if (isClaudeWorkspaceTrustError(output)) {
+      clearInterval(timer);
+      beginClaudeTrustTerminal({
+        id,
+        session: s,
+        cwd,
+        onTrusted: () => startClaudeResumeRemoteSession({ id, session: s, resumeId, remoteName, cwd, agent }),
+      });
+      return;
     }
 
     const match = output.match(agent.urlPattern);
@@ -885,8 +1063,6 @@ app.post('/api/sessions', async (req, res) => {
 
   // ── Native mode — spawn directly, pipe stdout/stderr ──
   const id = nextId++;
-  const cmd = agent.nativeBin();
-  const args = agent.nativeArgs(name);
   const mode = 'native';
 
   if (tool === 'codex') {
@@ -903,54 +1079,12 @@ app.post('/api/sessions', async (req, res) => {
   const session = {
     id, tool, name: name || `${agent.label} #${id}`,
     cwd: workDir, status: 'starting', url: null, mode,
-    pid: proc.pid, log: [],
+    pid: 0, log: [],
     startedAt: Date.now(), lastActivityAt: Date.now(),
   };
 
-  sessions.set(id, { ...session, proc });
-
-  const handleData = (chunk) => {
-    const text = stripAnsi(chunk.toString());
-    const s = sessions.get(id);
-    if (!s) return;
-
-    s.lastActivityAt = Date.now();
-    s.log.push(text);
-    if (s.log.length > 300) s.log.shift();
-
-    if (!s.url) {
-      for (const line of text.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const json = JSON.parse(trimmed);
-          const url = json.url || json.relay_url || json.connection_url;
-          if (url) { s.url = url; s.status = 'running'; broadcast({ type: 'session_update', session: sanitize(s) }); return; }
-        } catch {}
-        const match = trimmed.match(agent.urlPattern);
-        if (match) { s.url = match[0].replace(/[.,;:)\]]+$/, ''); s.status = 'running'; broadcast({ type: 'session_update', session: sanitize(s) }); return; }
-      }
-    }
-
-    broadcast({ type: 'session_update', session: sanitize(s) });
-  };
-
-  proc.stdout.on('data', handleData);
-  proc.stderr.on('data', handleData);
-
-  proc.on('error', (err) => {
-    const s = sessions.get(id);
-    if (s) { s.status = 'error'; s.log.push(`Error: ${err.message}`); broadcast({ type: 'session_update', session: sanitize(s) }); }
-  });
-
-  proc.on('exit', (code) => {
-    if (tool === 'codex') {
-      codexSessionCount = Math.max(0, codexSessionCount - 1);
-      if (codexSessionCount === 0) setCodexProxyConfig(false);
-    }
-    const s = sessions.get(id);
-    if (s) { s.status = 'stopped'; s.exitCode = code; broadcast({ type: 'session_update', session: sanitize(s) }); }
-  });
+  sessions.set(id, session);
+  startNativeRemoteSession({ id, tool, agent, name, cwd: workDir });
 
   res.json(sanitize(session));
 });
@@ -1130,7 +1264,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   // so open the browser automatically so the user gets feedback.
   if (process.platform === 'win32' && !process.stdout.isTTY) {
     setTimeout(() => {
-      try { Bun.spawn(['cmd', '/c', 'start', '', `http://localhost:${PORT}`]); } catch {}
+      try { Bun.spawn(['cmd', '/c', 'start', '', `http://localhost:${PORT}`], { windowsHide: true }); } catch {}
     }, 800);
   }
 
