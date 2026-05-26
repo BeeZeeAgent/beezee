@@ -54,6 +54,10 @@ function instanceSubdomain(accountSlug, instanceSlug) {
   return `${accountSlug}-${instanceSlug}`;
 }
 
+function instanceRelayUrl(subdomain) {
+  return `${PUBLIC_URL}/i/${encodeURIComponent(subdomain)}`;
+}
+
 function findInstanceBySubdomain(subdomain) {
   const store = loadStore();
   for (const account of store.accounts) {
@@ -74,7 +78,7 @@ function publicInstance(account, inst) {
     name: inst.name,
     slug: inst.slug,
     subdomain: sub,
-    relayUrl: `https://${sub}.${BASE_DOMAIN}`,
+    relayUrl: instanceRelayUrl(sub),
     token: inst.token,
     env: [
       `LAUNCHPAD_RELAY_URL=${PUBLIC_URL}`,
@@ -86,6 +90,37 @@ function publicInstance(account, inst) {
     connectedAt: node?.connectedAt || null,
     lastSeenAt: node?.lastSeenAt || null,
   };
+}
+
+function rewritePathProxyBody(buffer, contentType, publicPrefix) {
+  if (!publicPrefix) return buffer;
+  const textType = /text\/html|text\/css|application\/javascript|text\/javascript/i.test(contentType || "");
+  if (!textType) return buffer;
+
+  let body = buffer.toString("utf8");
+  if (/text\/html/i.test(contentType || "")) {
+    const prefixScript = `<script>
+(() => {
+  const prefix = ${JSON.stringify(publicPrefix)};
+  const addPrefix = value => typeof value === "string" && value.startsWith("/api") ? prefix + value : value;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (typeof input === "string") return originalFetch(addPrefix(input), init);
+    if (input instanceof Request && input.url.startsWith(location.origin + "/api")) {
+      input = new Request(prefix + new URL(input.url).pathname + new URL(input.url).search, input);
+    }
+    return originalFetch(input, init);
+  };
+  const OriginalEventSource = window.EventSource;
+  window.EventSource = function(url, config) { return new OriginalEventSource(addPrefix(url), config); };
+})();
+</script>`;
+    body = body
+      .replace(/(<head[^>]*>)/i, `$1${prefixScript}`)
+      .replace(/\b(src|href)="\/(assets\/[^"]*)"/g, `$1="${publicPrefix}/$2"`);
+  }
+  body = body.replace(/url\(\/(assets\/[^)]+)\)/g, `url(${publicPrefix}/$1)`);
+  return Buffer.from(body, "utf8");
 }
 
 // ── startup migration ─────────────────────────────────────────────────────────
@@ -366,7 +401,7 @@ wss.on("connection", (ws, req) => {
     connectedAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
   });
-  send(ws, { type: "hello", account_id: foundAccount.id, relay_url: `https://${sub}.${BASE_DOMAIN}` });
+  send(ws, { type: "hello", account_id: foundAccount.id, relay_url: instanceRelayUrl(sub) });
 
   ws.on("message", raw => {
     let msg;
@@ -398,8 +433,9 @@ async function proxyToNode(account, instanceToken, req, res, stripPrefix = "") {
   });
   const id = randomToken(10);
   const rawUrl = req.originalUrl || req.url || "/";
-  const targetPath = stripPrefix && rawUrl.startsWith(stripPrefix)
-    ? rawUrl.slice(stripPrefix.length) || "/"
+  const publicPrefix = stripPrefix.replace(/\/$/, "");
+  const targetPath = publicPrefix && rawUrl.startsWith(publicPrefix)
+    ? rawUrl.slice(publicPrefix.length) || "/"
     : rawUrl;
 
   const result = await new Promise(resolve => {
@@ -423,16 +459,28 @@ async function proxyToNode(account, instanceToken, req, res, stripPrefix = "") {
 
   for (const [key, value] of Object.entries(result.headers || {})) {
     if (!["connection", "content-encoding", "content-length", "transfer-encoding"].includes(key.toLowerCase())) {
-      res.setHeader(key, value);
+      if (key.toLowerCase() === "location" && typeof value === "string" && value.startsWith("/") && publicPrefix) {
+        res.setHeader(key, `${publicPrefix}${value}`);
+      } else {
+        res.setHeader(key, value);
+      }
     }
   }
-  res.status(result.status || 200).send(Buffer.from(result.body_b64 || "", "base64"));
+  const contentType = result.headers?.["content-type"] || result.headers?.["Content-Type"] || "";
+  const responseBody = rewritePathProxyBody(Buffer.from(result.body_b64 || "", "base64"), contentType, publicPrefix);
+  res.status(result.status || 200).send(responseBody);
 }
 
 app.all("/r/:subdomain/*", (req, res) => {
   const found = findInstanceBySubdomain(req.params.subdomain);
   if (!found) return res.status(404).send("Unknown relay");
   proxyToNode(found.account, found.instance.token, req, res, `/r/${req.params.subdomain}`);
+});
+
+app.all(["/i/:subdomain", "/i/:subdomain/*"], (req, res) => {
+  const found = findInstanceBySubdomain(req.params.subdomain);
+  if (!found) return res.status(404).send("Unknown relay");
+  proxyToNode(found.account, found.instance.token, req, res, `/i/${req.params.subdomain}`);
 });
 
 const webDist = path.join(__dirname, "../web/dist");

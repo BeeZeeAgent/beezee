@@ -77,7 +77,7 @@ function AuthView({ onAuthed }: { onAuthed: (account: Account) => void }) {
       <section className="auth-panel">
         <div className="brand-mark"><Cloud size={24} /></div>
         <h1>Launchpad Cloud Relay</h1>
-        <p>Connect one or more local Launchpad instances and access them from anywhere through permanent subdomains.</p>
+        <p>Connect one or more local Launchpad instances and access them from anywhere through permanent app URLs.</p>
       </section>
       <Card className="auth-card">
         <div className="segmented">
@@ -90,7 +90,7 @@ function AuthView({ onAuthed }: { onAuthed: (account: Account) => void }) {
           <label>
             Account slug
             <Input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-account" />
-            <span style={{ fontSize: 11, color: "#71717a" }}>Used as a prefix for your instance subdomains</span>
+            <span style={{ fontSize: 11, color: "#71717a" }}>Used as a prefix for your instance URLs</span>
           </label>
         )}
         {error && <p className="error">{error}</p>}
@@ -262,7 +262,7 @@ function AppView({ account, onLogout }: { account: Account; onLogout: () => void
           <Card className="add-form">
             <strong>New instance</strong>
             <p style={{ margin: 0, color: "#71717a", fontSize: 13 }}>
-              Name this Launchpad (e.g. "home pi", "work server"). Its subdomain will be <code>{current.slug}-name.beezyai.net</code>
+              Name this Launchpad (e.g. "home pi", "work server"). Its URL will be <code>/i/{current.slug}-name</code>
             </p>
             <div style={{ display: "flex", gap: 8 }}>
               <Input
