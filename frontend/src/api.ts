@@ -30,7 +30,9 @@ export interface Session {
   pid: number;
   log: string[];
   startedAt: number;
+  lastActivityAt: number;
   exitCode?: number;
+  idleKilled?: boolean;
 }
 
 const BASE = import.meta.env.DEV ? "http://localhost:4242" : "";
@@ -57,6 +59,20 @@ export const api = {
 
   getLog: (id: number): Promise<{ log: string[] }> =>
     fetch(`${BASE}/api/sessions/${id}/log`).then(r => r.json()),
+
+  relayStatus: (): Promise<{ configured: boolean; url: string; nodeId: string }> =>
+    fetch(`${BASE}/api/relay/status`).then(r => r.json()),
+
+  relayPair: (code: string, relayUrl: string): Promise<{ ok: boolean; instanceName: string }> =>
+    fetch(`${BASE}/api/relay/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, relayUrl }),
+    }).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Pairing failed');
+      return data;
+    }),
 };
 
 export function subscribeEvents(onEvent: (data: unknown) => void): () => void {

@@ -30,4 +30,4 @@ echo ">>> Building and restarting container"
 "${SSH[@]}" "$VPS_HOST" "cd '$VPS_PATH' && if [ ! -f .env ]; then cp .env.example .env && secret=\$(openssl rand -hex 32) && sed -i \"s/replace-with-a-long-random-secret/\$secret/\" .env; fi && docker compose up -d --build"
 
 echo ">>> Health check"
-"${SSH[@]}" "$VPS_HOST" "cd '$VPS_PATH' && set -a && . ./.env && set +a && curl -fsS http://127.0.0.1:\${PORT:-8789}/health"
+"${SSH[@]}" "$VPS_HOST" "cd '$VPS_PATH' && set -a && . ./.env && set +a && docker exec launchpad_cloud_relay node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '8789') + '/health').then(async r => { console.log(await r.text()); process.exit(r.ok ? 0 : 1); }).catch(err => { console.error(err); process.exit(1); })\""

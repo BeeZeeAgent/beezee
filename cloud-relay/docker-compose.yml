@@ -5,6 +5,6 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${PORT:-8789}:8789"
+      - "8788:8789"
     volumes:
       - ./data:/app/data

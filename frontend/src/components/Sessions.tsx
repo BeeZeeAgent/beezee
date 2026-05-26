@@ -57,7 +57,7 @@ export function Sessions({ launchDir }: SessionsProps) {
   }, []);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-w-0 flex-col">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-3 border-b">
         <span className="text-sm font-medium text-muted-foreground">
@@ -70,7 +70,7 @@ export function Sessions({ launchDir }: SessionsProps) {
       </div>
 
       {/* List */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-w-0 flex-1">
         {sessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-20 text-muted-foreground">
             <Inbox className="h-10 w-10 opacity-30" />
@@ -80,7 +80,7 @@ export function Sessions({ launchDir }: SessionsProps) {
             </div>
           </div>
         ) : (
-          <div className="p-3 space-y-3">
+          <div className="min-w-0 space-y-3 p-3">
             {sessions.map(s => (
               <SessionCard key={s.id} session={s} onRemove={handleRemove} />
             ))}

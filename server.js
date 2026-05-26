@@ -8,9 +8,20 @@ import { networkInterfaces } from 'os';
 const app = express();
 const PORT = 4242;
 const HOME = process.env.HOME || '/home/pi';
-const RELAY_URL = process.env.LAUNCHPAD_RELAY_URL || '';
-const RELAY_NODE_ID = process.env.LAUNCHPAD_RELAY_NODE_ID || 'launchpad-local';
-const RELAY_TOKEN = process.env.LAUNCHPAD_RELAY_TOKEN || '';
+
+const RELAY_CONFIG_PATH = path.join(HOME, '.launchpad-relay.json');
+
+function loadRelayConfig() {
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(RELAY_CONFIG_PATH, 'utf8')); } catch {}
+  return {
+    url: process.env.LAUNCHPAD_RELAY_URL || saved.url || '',
+    nodeId: process.env.LAUNCHPAD_RELAY_NODE_ID || saved.nodeId || 'launchpad-local',
+    token: process.env.LAUNCHPAD_RELAY_TOKEN || saved.token || '',
+  };
+}
+
+let relayConfig = loadRelayConfig();
 
 const sessions = new Map();
 let nextId = 1;
@@ -105,25 +116,29 @@ function recoverTtydSessions() {
   }
 }
 
+let stopCurrentRelay = null;
+
 function startCloudRelayConnector() {
-  if (!RELAY_URL || !RELAY_TOKEN) return;
+  if (!relayConfig.url || !relayConfig.token) return null;
   const WebSocketCtor = globalThis.WebSocket;
   if (!WebSocketCtor) {
     console.warn('[Relay] WebSocket is not available in this Node runtime. Use Node 22+ for cloud relay linking.');
-    return;
+    return null;
   }
 
   let stopped = false;
+  const stop = () => { stopped = true; };
+
   const connect = () => {
-    const url = new URL('/node', RELAY_URL);
+    const url = new URL('/node', relayConfig.url);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('node_id', RELAY_NODE_ID);
-    url.searchParams.set('token', RELAY_TOKEN);
+    url.searchParams.set('node_id', relayConfig.nodeId);
+    url.searchParams.set('token', relayConfig.token);
 
     const ws = new WebSocketCtor(url);
 
     ws.addEventListener('open', () => {
-      console.log(`[Relay] Connected as ${RELAY_NODE_ID}`);
+      console.log(`[Relay] Connected as ${relayConfig.nodeId}`);
     });
 
     ws.addEventListener('message', async (event) => {
@@ -173,6 +188,7 @@ function startCloudRelayConnector() {
   process.on('SIGTERM', () => { stopped = true; });
   process.on('SIGINT', () => { stopped = true; });
   connect();
+  return stop;
 }
 
 // ── Agent registry ─────────────────────────────────────────────────────────
@@ -348,6 +364,7 @@ app.post('/api/sessions', async (req, res) => {
     pid: proc.pid,
     log: [],
     startedAt: Date.now(),
+    lastActivityAt: Date.now(),
   };
 
   sessions.set(id, { ...session, proc });
@@ -357,6 +374,7 @@ app.post('/api/sessions', async (req, res) => {
     const s = sessions.get(id);
     if (!s) return;
 
+    s.lastActivityAt = Date.now();
     s.log.push(text);
     if (s.log.length > 300) s.log.shift();
 
@@ -438,6 +456,7 @@ app.get('/api/sessions/:id/log', (req, res) => {
   const id = parseInt(req.params.id);
   const s = sessions.get(id);
   if (!s) return res.status(404).json({ error: 'Session not found' });
+  if (s.status === 'running' || s.status === 'starting') s.lastActivityAt = Date.now();
   res.json({ log: s.log });
 });
 
@@ -470,12 +489,63 @@ app.get('*', (_req, res) => {
 
 recoverTtydSessions();
 
+// Kill processes that have been idle for 30 minutes to prevent memory leaks.
+// The session entry (id, logs, url) is preserved so the user can resume.
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    if (s.status !== 'running' && s.status !== 'starting') continue;
+    if (now - s.lastActivityAt < IDLE_TIMEOUT_MS) continue;
+    s.log.push(`[launchpad] Idle for 30 min — process killed to free memory. Start a new session to resume.\n`);
+    if (s.log.length > 300) s.log.shift();
+    s.idleKilled = true;
+    if (s.tmuxSession) {
+      try { execSync(`tmux kill-session -t ${s.tmuxSession}`, { stdio: 'ignore' }); } catch {}
+    }
+    try {
+      if (s.proc) s.proc.kill('SIGTERM');
+      else if (s.pid) process.kill(s.pid, 'SIGTERM');
+    } catch {}
+  }
+}, 2 * 60 * 1000);
+
+app.get('/api/relay/status', (_req, res) => {
+  res.json({
+    configured: !!(relayConfig.url && relayConfig.token),
+    url: relayConfig.url,
+    nodeId: relayConfig.nodeId,
+  });
+});
+
+app.post('/api/relay/pair', express.json(), async (req, res) => {
+  const { code, relayUrl } = req.body || {};
+  if (!code || !relayUrl) return res.status(400).json({ error: 'code and relayUrl are required' });
+  try {
+    const response = await fetch(`${relayUrl}/api/pair/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await response.json();
+    if (!response.ok) return res.status(400).json({ error: data.error || 'Claim failed' });
+    const newConfig = { url: relayUrl, nodeId: data.nodeId, token: data.token };
+    fs.writeFileSync(RELAY_CONFIG_PATH, JSON.stringify(newConfig, null, 2));
+    relayConfig = newConfig;
+    if (stopCurrentRelay) stopCurrentRelay();
+    stopCurrentRelay = startCloudRelayConnector();
+    res.json({ ok: true, instanceName: data.instanceName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();
   console.log(`\nLaunchpad ready:`);
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const ip of ips) console.log(`  Network: http://${ip}:${PORT}`);
-  if (RELAY_URL && RELAY_TOKEN) console.log(`  Relay:   ${RELAY_URL} (${RELAY_NODE_ID})`);
+  if (relayConfig.url && relayConfig.token) console.log(`  Relay:   ${relayConfig.url} (${relayConfig.nodeId})`);
   console.log();
-  startCloudRelayConnector();
+  stopCurrentRelay = startCloudRelayConnector();
 });

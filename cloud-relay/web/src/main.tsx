@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CheckCircle2, Cloud, Copy, CreditCard, Loader2, LogOut, PlugZap, Server } from "lucide-react";
+import { Cloud, Copy, CreditCard, Loader2, LogOut, Plus, Server, Trash2 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
 import { Input } from "./components/ui/input";
@@ -10,8 +10,23 @@ type Account = {
   id: string;
   email: string;
   slug: string;
-  relayUrl: string;
   billing: { status: string; plan: string; relayEnabled: boolean; currentPeriodEnd?: string | null };
+};
+
+type Instance = {
+  id: string;
+  name: string;
+  slug: string;
+  subdomain: string;
+  relayUrl: string;
+  token: string;
+  env: string;
+  createdAt: string;
+  online: boolean;
+  connectedAt: string | null;
+  lastSeenAt: string | null;
+  pairingCode?: string;
+  pairLink?: string;
 };
 
 const tokenKey = "launchpadRelayToken";
@@ -62,7 +77,7 @@ function AuthView({ onAuthed }: { onAuthed: (account: Account) => void }) {
       <section className="auth-panel">
         <div className="brand-mark"><Cloud size={24} /></div>
         <h1>Launchpad Cloud Relay</h1>
-        <p>Connect a local Launchpad to a paid relay and open it from any device through a permanent subdomain.</p>
+        <p>Connect one or more local Launchpad instances and access them from anywhere through permanent subdomains.</p>
       </section>
       <Card className="auth-card">
         <div className="segmented">
@@ -72,35 +87,79 @@ function AuthView({ onAuthed }: { onAuthed: (account: Account) => void }) {
         <label>Email<Input value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>
         <label>Password<Input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} /></label>
         {mode === "register" && (
-          <label>Subdomain<Input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-launchpad" /></label>
+          <label>
+            Account slug
+            <Input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-account" />
+            <span style={{ fontSize: 11, color: "#71717a" }}>Used as a prefix for your instance subdomains</span>
+          </label>
         )}
         {error && <p className="error">{error}</p>}
         <Button onClick={submit} disabled={loading || !email || !password || (mode === "register" && !slug)}>
           {loading ? <Loader2 className="spin" size={16} /> : null}
-          {mode === "register" ? "Create relay" : "Sign in"}
+          {mode === "register" ? "Create account" : "Sign in"}
         </Button>
       </Card>
     </div>
   );
 }
 
+function InstanceCard({ instance, onDelete }: { instance: Instance; onDelete: (id: string) => Promise<void> }) {
+  const [copied, setCopied] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(instance.env);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const del = async () => {
+    if (!confirm(`Delete instance "${instance.name}"? This cannot be undone.`)) return;
+    setDeleting(true);
+    try { await onDelete(instance.id); } finally { setDeleting(false); }
+  };
+
+  return (
+    <Card className="instance-card">
+      <div className="instance-header">
+        <div className="instance-name">
+          <strong>{instance.name}</strong>
+          <span className={`badge ${instance.online ? "online" : "offline"}`}>
+            {instance.online ? "Online" : "Offline"}
+          </span>
+        </div>
+        <button className="delete-btn" onClick={del} disabled={deleting} title="Delete instance">
+          {deleting ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+        </button>
+      </div>
+      <a href={instance.relayUrl} target="_blank" rel="noreferrer" className="relay-url">{instance.relayUrl}</a>
+      <pre>{instance.env}</pre>
+      <Button variant="outline" size="sm" onClick={copy}>
+        <Copy size={14} />{copied ? "Copied!" : "Copy env vars"}
+      </Button>
+    </Card>
+  );
+}
+
 function AppView({ account, onLogout }: { account: Account; onLogout: () => void }) {
   const [current, setCurrent] = useState(account);
-  const [nodes, setNodes] = useState<Array<{ nodeId: string; connectedAt: string; lastSeenAt: string }>>([]);
-  const [connect, setConnect] = useState<{ env: string; relayUrl: string; nodeId: string; nodeToken: string } | null>(null);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [addError, setAddError] = useState("");
+  const [addLoading, setAddLoading] = useState(false);
+  const [pairing, setPairing] = useState<Instance | null>(null);
   const [error, setError] = useState("");
   const paid = current.billing.relayEnabled;
-  const statusLabel = paid ? `${current.billing.status} ${current.billing.plan}` : "inactive";
+  const statusLabel = paid ? `${current.billing.status} · ${current.billing.plan}` : "inactive";
 
   const refresh = async () => {
-    const [me, nodeData, connectData] = await Promise.all([
+    const [me, instData] = await Promise.all([
       api<{ account: Account }>("/api/me"),
-      api<{ nodes: typeof nodes }>("/api/nodes"),
-      api<typeof connect>("/api/connect"),
+      api<{ instances: Instance[] }>("/api/instances"),
     ]);
     setCurrent(me.account);
-    setNodes(nodeData.nodes);
-    setConnect(connectData);
+    setInstances(instData.instances);
   };
 
   useEffect(() => {
@@ -119,11 +178,36 @@ function AppView({ account, onLogout }: { account: Account; onLogout: () => void
     }
   };
 
-  const copyEnv = async () => {
-    if (connect) await navigator.clipboard.writeText(connect.env);
+  const startAdding = () => {
+    setAdding(true);
+    setAddError("");
+    setNewName("");
   };
 
-  const online = nodes.length > 0;
+  const createInstance = async () => {
+    if (!newName.trim()) return;
+    setAddLoading(true);
+    setAddError("");
+    try {
+      const data = await api<{ instance: Instance }>("/api/instances", {
+        method: "POST",
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      setInstances(prev => [...prev, data.instance]);
+      setAdding(false);
+      setNewName("");
+      if (data.instance.pairingCode) setPairing(data.instance);
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : "Failed to create instance");
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  const deleteInstance = async (id: string) => {
+    await api(`/api/instances/${id}`, { method: "DELETE" });
+    setInstances(prev => prev.filter(i => i.id !== id));
+  };
 
   return (
     <div className="app-shell">
@@ -132,38 +216,83 @@ function AppView({ account, onLogout }: { account: Account; onLogout: () => void
           <h1>Cloud Relay</h1>
           <p>{current.email}</p>
         </div>
-        <Button className="secondary" onClick={onLogout}><LogOut size={16} />Sign out</Button>
+        <Button variant="outline" onClick={onLogout}><LogOut size={16} />Sign out</Button>
       </header>
 
       {error && <p className="error">{error}</p>}
 
-      <div className="grid">
-        <Card className="panel">
-          <div className="panel-title"><CreditCard size={18} /> Billing</div>
-          <strong>{statusLabel}</strong>
-          <p>{paid ? "Relay access is enabled for this account." : "Activate billing to allow the local Launchpad node to connect."}</p>
-          <Button onClick={checkout}>{paid ? "Manage billing" : "Start relay plan"}</Button>
+      {pairing && (
+        <Card className="pairing-panel">
+          <div className="pairing-header">
+            <strong>Connect "{pairing.name}"</strong>
+            <button className="delete-btn" onClick={() => setPairing(null)} title="Dismiss">✕</button>
+          </div>
+          <p style={{ margin: 0, color: "#71717a", fontSize: 13 }}>
+            Open this link on the machine running Launchpad to connect it automatically. The code expires in 10 minutes.
+          </p>
+          <div className="pairing-code">{pairing.pairingCode}</div>
+          <a className="pair-link-btn" href={pairing.pairLink} target="_blank" rel="noreferrer">
+            Open on local machine →
+          </a>
+          <details>
+            <summary style={{ fontSize: 13, color: "#71717a", cursor: "pointer" }}>Manual setup (env vars)</summary>
+            <pre style={{ marginTop: 8 }}>{pairing.env}</pre>
+          </details>
         </Card>
+      )}
 
-        <Card className="panel">
-          <div className="panel-title"><Server size={18} /> Local Launchpad</div>
-          <strong>{online ? "Online" : "Waiting for node"}</strong>
-          <p>{online ? nodes[0].nodeId : "Set these environment variables on the local Launchpad server and restart it."}</p>
-          <Button className="secondary" onClick={copyEnv} disabled={!connect}><Copy size={16} />Copy env</Button>
-        </Card>
-      </div>
-
-      <Card className="wide-panel">
-        <div className="panel-title"><PlugZap size={18} /> Permanent Access</div>
-        <a href={current.relayUrl} target="_blank" rel="noreferrer">{current.relayUrl}</a>
-        <p>Point wildcard DNS for <code>*.{location.host}</code> at this relay host, then each account slug becomes a stable subdomain.</p>
-        {connect && <pre>{connect.env}</pre>}
+      <Card className="panel billing-panel">
+        <div className="panel-title"><CreditCard size={18} /> Billing</div>
+        <strong>{statusLabel}</strong>
+        <p>{paid ? "Relay access is enabled. Nodes can connect." : "Activate billing so local Launchpad nodes can connect."}</p>
+        <div><Button onClick={checkout}>{paid ? "Manage billing" : "Start relay plan"}</Button></div>
       </Card>
 
-      <div className="checks">
-        <span><CheckCircle2 size={15} /> Account authentication</span>
-        <span><CheckCircle2 size={15} /> Stripe checkout and webhook</span>
-        <span><CheckCircle2 size={15} /> WebSocket local-node tunnel</span>
+      <div className="instances-section">
+        <div className="instances-header">
+          <div className="panel-title"><Server size={18} /> Instances</div>
+          {!adding && (
+            <Button variant="outline" size="sm" onClick={startAdding}>
+              <Plus size={14} />Add instance
+            </Button>
+          )}
+        </div>
+
+        {adding && (
+          <Card className="add-form">
+            <strong>New instance</strong>
+            <p style={{ margin: 0, color: "#71717a", fontSize: 13 }}>
+              Name this Launchpad (e.g. "home pi", "work server"). Its subdomain will be <code>{current.slug}-name.beezyai.net</code>
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Input
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                placeholder="home-pi"
+                onKeyDown={e => e.key === "Enter" && createInstance()}
+                autoFocus
+              />
+              <Button onClick={createInstance} disabled={addLoading || !newName.trim()}>
+                {addLoading ? <Loader2 size={14} className="spin" /> : null}
+                Create
+              </Button>
+              <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>
+            </div>
+            {addError && <p className="error">{addError}</p>}
+          </Card>
+        )}
+
+        {instances.length === 0 && !adding && (
+          <Card className="panel">
+            <p style={{ margin: 0, color: "#71717a" }}>No instances yet. Add one to connect a local Launchpad.</p>
+          </Card>
+        )}
+
+        <div className="instances-list">
+          {instances.map(inst => (
+            <InstanceCard key={inst.id} instance={inst} onDelete={deleteInstance} />
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -54,12 +54,11 @@ export function getAccountFromBearer(header) {
   return store.accounts.find(a => a.id === session.accountId) || null;
 }
 
-export function publicAccount(account, baseDomain) {
+export function publicAccount(account) {
   return {
     id: account.id,
     email: account.email,
     slug: account.slug,
-    relayUrl: `https://${account.slug}.${baseDomain}`,
     billing: account.billing || { status: "inactive", plan: "free", relayEnabled: false },
   };
 }

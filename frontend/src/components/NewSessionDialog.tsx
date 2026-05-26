@@ -79,7 +79,7 @@ export function NewSessionDialog({ open, onOpenChange, defaultDir, onStart }: Ne
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm mx-4">
+      <DialogContent className="max-w-sm w-[calc(100vw-2rem)]">
         <DialogHeader>
           <DialogTitle>New session</DialogTitle>
         </DialogHeader>
@@ -96,7 +96,7 @@ export function NewSessionDialog({ open, onOpenChange, defaultDir, onStart }: Ne
             ) : agents.length === 0 ? (
               <p className="text-sm text-muted-foreground">No agents found.</p>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 min-w-0">
                 {agents.map(agent => {
                   const Icon = AGENT_ICONS[agent.id] ?? Bot;
                   const ModeIcon = agentModeIcon(agent);
@@ -109,7 +109,7 @@ export function NewSessionDialog({ open, onOpenChange, defaultDir, onStart }: Ne
                       onClick={() => agent.installed && setTool(agent.id)}
                       disabled={!agent.installed}
                       className={cn(
-                        "flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-colors",
+                        "flex min-w-0 flex-col items-start gap-1.5 overflow-hidden rounded-lg border p-3 text-left transition-colors",
                         agent.installed
                           ? isSelected
                             ? "border-primary bg-primary/5"
@@ -118,13 +118,13 @@ export function NewSessionDialog({ open, onOpenChange, defaultDir, onStart }: Ne
                       )}
                     >
                       <Icon className={cn("h-4 w-4", isSelected ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm font-medium">{agent.label}</span>
+                      <span className="w-full truncate text-sm font-medium">{agent.label}</span>
                       <span className={cn(
-                        "flex items-center gap-1 text-xs font-mono",
+                        "flex w-full min-w-0 items-center gap-1 text-xs font-mono",
                         isSelected ? "text-primary/70" : "text-muted-foreground"
                       )}>
-                        <ModeIcon className="h-3 w-3" />
-                        {modeLabel}
+                        <ModeIcon className="h-3 w-3 shrink-0" />
+                        <span className="min-w-0 truncate">{modeLabel}</span>
                       </span>
 
                       {/* Install hint for missing agents */}

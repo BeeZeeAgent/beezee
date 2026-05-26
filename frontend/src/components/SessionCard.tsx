@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, Square, ChevronDown, ChevronUp, Terminal, Loader2 } from "lucide-react";
+import { ExternalLink, Square, ChevronDown, ChevronUp, Terminal, Loader2, Clock } from "lucide-react";
 import { type Session, api } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,13 +51,13 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
   const isTtyd = session.mode === "ttyd";
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="w-full max-w-full overflow-hidden">
       <CardContent className="p-0">
         {/* Header */}
-        <div className="flex items-start gap-3 p-4">
+        <div className="flex min-w-0 items-start gap-3 p-4">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1 min-w-0">
-              <span className="font-medium text-sm truncate min-w-0">{session.name}</span>
+            <div className="flex flex-wrap items-center gap-2 mb-1 min-w-0">
+              <span className="min-w-0 max-w-full flex-1 basis-24 truncate text-sm font-medium">{session.name}</span>
               <span className={cn(
                 "shrink-0 text-xs px-1.5 py-0.5 rounded-full border font-medium",
                 STATUS_COLORS[session.status]
@@ -67,9 +67,15 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
                 )}
                 {session.status}
               </span>
+              {session.idleKilled && (
+                <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full border font-medium bg-amber-500/15 text-amber-600 border-amber-500/30 flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  idle timeout
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-2 min-w-0">
-              <Badge variant="outline" className="text-xs font-mono px-1.5 py-0 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <Badge variant="outline" className="max-w-full text-xs font-mono px-1.5 py-0 shrink-0">
                 {TOOL_LABELS[session.tool] ?? session.tool}
               </Badge>
               {isTtyd && (
@@ -78,7 +84,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
                   terminal
                 </Badge>
               )}
-              <span className="text-xs text-muted-foreground truncate min-w-0">{session.cwd}</span>
+              <span className="min-w-0 flex-1 basis-32 truncate text-xs text-muted-foreground">{session.cwd}</span>
               <span className="text-xs text-muted-foreground shrink-0">{elapsedStr}</span>
             </div>
           </div>
@@ -138,7 +144,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
             }
           </button>
           {showLog && (
-            <pre className="text-xs text-muted-foreground bg-zinc-950 p-3 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
+            <pre className="text-xs text-muted-foreground bg-zinc-950 p-3 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono">
               {log.join("") || "(no output yet)"}
             </pre>
           )}
