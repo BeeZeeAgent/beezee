@@ -33,6 +33,26 @@ export interface Session {
   lastActivityAt: number;
   exitCode?: number;
   idleKilled?: boolean;
+  paused?: boolean;
+}
+
+export interface AgentSession {
+  agent: string;
+  id: string;
+  cwd: string;
+  title: string;
+  updatedAt: number;
+  agents: string[];
+  agentSessions: Record<string, string>;
+}
+
+export interface SessionSyncStatus {
+  enabled: boolean;
+  intervalMs: number;
+  agents: string[];
+  lastRunAt: string | null;
+  lastError: string | null;
+  mirrors: number;
 }
 
 const BASE = import.meta.env.DEV ? "http://localhost:4242" : "";
@@ -47,15 +67,31 @@ export const api = {
   getSessions: (): Promise<Session[]> =>
     fetch(`${BASE}/api/sessions`).then(r => r.json()),
 
-  startSession: (tool: string, cwd: string, name?: string): Promise<Session> =>
+  getAgentSessions: (): Promise<{ sessions: AgentSession[] }> =>
+    fetch(`${BASE}/api/agent-sessions`).then(r => r.json()),
+
+  getSessionSync: (): Promise<SessionSyncStatus> =>
+    fetch(`${BASE}/api/session-sync`).then(r => r.json()),
+
+  setSessionSync: (enabled: boolean): Promise<SessionSyncStatus> =>
+    fetch(`${BASE}/api/session-sync`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }).then(r => r.json()),
+
+  startSession: (tool: string, cwd: string, name?: string, resumeId?: string): Promise<Session> =>
     fetch(`${BASE}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool, cwd, name }),
+      body: JSON.stringify({ tool, cwd, name, resumeId }),
     }).then(r => r.json()),
 
-  stopSession: (id: number): Promise<{ ok: boolean }> =>
+  deleteSession: (id: number): Promise<{ ok: boolean }> =>
     fetch(`${BASE}/api/sessions/${id}`, { method: "DELETE" }).then(r => r.json()),
+
+  pauseSession: (id: number): Promise<Session> =>
+    fetch(`${BASE}/api/sessions/${id}/pause`, { method: "POST" }).then(r => r.json()),
 
   getLog: (id: number): Promise<{ log: string[] }> =>
     fetch(`${BASE}/api/sessions/${id}/log`).then(r => r.json()),

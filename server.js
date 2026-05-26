@@ -4,6 +4,7 @@ import { createServer } from 'net';
 import fs from 'fs';
 import path from 'path';
 import { networkInterfaces } from 'os';
+import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
 
 const app = express();
 const PORT = 4242;
@@ -69,6 +70,16 @@ function which(bin) {
 function isProcessAlive(pid) {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function stopSessionProcess(s, signal = 'SIGTERM') {
+  if (s.tmuxSession) {
+    try { execSync(`tmux kill-session -t ${s.tmuxSession}`, { stdio: 'ignore' }); } catch {}
+  }
+  try {
+    if (s.proc) s.proc.kill(signal);
+    else if (s.pid) process.kill(s.pid, signal);
+  } catch {}
 }
 
 function recoverTtydSessions() {
@@ -210,7 +221,11 @@ const AGENTS = {
     isInstalled: () => !!which('claude'),
     nativeAvailable: () => !!which('claude'),
     nativeBin: () => 'claude',
-    nativeArgs: (name) => name ? ['remote-control', '--name', name] : ['remote-control'],
+    nativeArgs: (name) => {
+      const args = ['remote-control', '--spawn', 'session'];
+      if (name) args.push('--name', name);
+      return args;
+    },
     urlPattern: /https:\/\/claude\.ai\/code[^\s\x00-\x1F"']+/,
     installHint: 'npm install -g @anthropic-ai/claude-code',
     installUrl: 'https://claude.ai/code',
@@ -286,8 +301,20 @@ app.get('/api/sessions', (_req, res) => {
   res.json([...sessions.values()].map(sanitize));
 });
 
+app.get('/api/agent-sessions', (_req, res) => {
+  res.json({ sessions: listAgentSessions() });
+});
+
+app.get('/api/session-sync', (_req, res) => {
+  res.json(getSyncStatus());
+});
+
+app.patch('/api/session-sync', (req, res) => {
+  res.json(saveSyncConfig({ enabled: req.body?.enabled !== false }));
+});
+
 app.post('/api/sessions', async (req, res) => {
-  const { tool, cwd, name } = req.body;
+  const { tool, cwd, name, resumeId } = req.body;
   const workDir = cwd || HOME;
 
   const agent = AGENTS[tool];
@@ -318,7 +345,24 @@ app.post('/api/sessions', async (req, res) => {
 
   let cmd, args, mode, immediateUrl, tmuxSession = null;
 
-  if (agent.nativeAvailable()) {
+  if (resumeId && tool === 'claude' && agent.nativeAvailable()) {
+    cmd = agent.nativeBin();
+    args = agent.nativeArgs(name || `Resume ${String(resumeId).slice(0, 8)}`);
+    mode = 'native';
+  } else if (resumeId) {
+    if (!which('ttyd')) {
+      return res.status(503).json({ error: 'ttyd not found — install it to resume stored sessions' });
+    }
+    const port = await getFreePort();
+    const ip = getLocalIPs()[0] || 'localhost';
+    tmuxSession = `lp-${Date.now()}-${nextId}`;
+    cmd = 'ttyd';
+    const resumeArgs = tool === 'codex' ? ['resume', String(resumeId)] : ['--resume', String(resumeId)];
+    args = ['-p', String(port), '-W', '-t', 'fontSize=16',
+            'tmux', 'new-session', '-A', '-s', tmuxSession, '-c', workDir, agent.binary, ...resumeArgs];
+    mode = 'ttyd';
+    immediateUrl = `http://${ip}:${port}`;
+  } else if (agent.nativeAvailable()) {
     cmd = agent.nativeBin();
     args = agent.nativeArgs(name);
     mode = 'native';
@@ -440,16 +484,24 @@ app.delete('/api/sessions/:id', (req, res) => {
   const id = parseInt(req.params.id);
   const s = sessions.get(id);
   if (!s) return res.status(404).json({ error: 'Session not found' });
-  if (s.tmuxSession) {
-    try { execSync(`tmux kill-session -t ${s.tmuxSession}`, { stdio: 'ignore' }); } catch {}
-  }
-  try {
-    if (s.proc) s.proc.kill('SIGTERM');
-    else if (s.pid) process.kill(s.pid, 'SIGTERM');
-  } catch {}
+  stopSessionProcess(s);
   sessions.delete(id);
   broadcast({ type: 'session_removed', id });
   res.json({ ok: true });
+});
+
+app.post('/api/sessions/:id/pause', (req, res) => {
+  const id = parseInt(req.params.id);
+  const s = sessions.get(id);
+  if (!s) return res.status(404).json({ error: 'Session not found' });
+  stopSessionProcess(s);
+  s.status = 'stopped';
+  s.paused = true;
+  s.lastActivityAt = Date.now();
+  s.log.push(`[launchpad] Paused at ${new Date().toISOString()}\n`);
+  if (s.log.length > 300) s.log.shift();
+  broadcast({ type: 'session_update', session: sanitize(s) });
+  res.json(sanitize(s));
 });
 
 app.get('/api/sessions/:id/log', (req, res) => {
@@ -458,6 +510,36 @@ app.get('/api/sessions/:id/log', (req, res) => {
   if (!s) return res.status(404).json({ error: 'Session not found' });
   if (s.status === 'running' || s.status === 'starting') s.lastActivityAt = Date.now();
   res.json({ log: s.log });
+});
+
+app.get('/api/relay/status', (_req, res) => {
+  res.json({
+    configured: !!(relayConfig.url && relayConfig.token),
+    url: relayConfig.url,
+    nodeId: relayConfig.nodeId,
+  });
+});
+
+app.post('/api/relay/pair', express.json(), async (req, res) => {
+  const { code, relayUrl } = req.body || {};
+  if (!code || !relayUrl) return res.status(400).json({ error: 'code and relayUrl are required' });
+  try {
+    const response = await fetch(`${relayUrl}/api/pair/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await response.json();
+    if (!response.ok) return res.status(400).json({ error: data.error || 'Claim failed' });
+    const newConfig = { url: relayUrl, nodeId: data.nodeId, token: data.token };
+    fs.writeFileSync(RELAY_CONFIG_PATH, JSON.stringify(newConfig, null, 2));
+    relayConfig = newConfig;
+    if (stopCurrentRelay) stopCurrentRelay();
+    stopCurrentRelay = startCloudRelayConnector();
+    res.json({ ok: true, instanceName: data.instanceName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── SSE ───────────────────────────────────────────────────────────────────
@@ -500,45 +582,9 @@ setInterval(() => {
     s.log.push(`[launchpad] Idle for 30 min — process killed to free memory. Start a new session to resume.\n`);
     if (s.log.length > 300) s.log.shift();
     s.idleKilled = true;
-    if (s.tmuxSession) {
-      try { execSync(`tmux kill-session -t ${s.tmuxSession}`, { stdio: 'ignore' }); } catch {}
-    }
-    try {
-      if (s.proc) s.proc.kill('SIGTERM');
-      else if (s.pid) process.kill(s.pid, 'SIGTERM');
-    } catch {}
+    stopSessionProcess(s);
   }
 }, 2 * 60 * 1000);
-
-app.get('/api/relay/status', (_req, res) => {
-  res.json({
-    configured: !!(relayConfig.url && relayConfig.token),
-    url: relayConfig.url,
-    nodeId: relayConfig.nodeId,
-  });
-});
-
-app.post('/api/relay/pair', express.json(), async (req, res) => {
-  const { code, relayUrl } = req.body || {};
-  if (!code || !relayUrl) return res.status(400).json({ error: 'code and relayUrl are required' });
-  try {
-    const response = await fetch(`${relayUrl}/api/pair/claim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const data = await response.json();
-    if (!response.ok) return res.status(400).json({ error: data.error || 'Claim failed' });
-    const newConfig = { url: relayUrl, nodeId: data.nodeId, token: data.token };
-    fs.writeFileSync(RELAY_CONFIG_PATH, JSON.stringify(newConfig, null, 2));
-    relayConfig = newConfig;
-    if (stopCurrentRelay) stopCurrentRelay();
-    stopCurrentRelay = startCloudRelayConnector();
-    res.json({ ok: true, instanceName: data.instanceName });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 app.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();
@@ -548,4 +594,7 @@ app.listen(PORT, '0.0.0.0', () => {
   if (relayConfig.url && relayConfig.token) console.log(`  Relay:   ${relayConfig.url} (${relayConfig.nodeId})`);
   console.log();
   stopCurrentRelay = startCloudRelayConnector();
+  startSessionSyncLoop(() => {
+    broadcast({ type: 'agent_sessions_updated' });
+  });
 });

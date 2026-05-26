@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, Square, ChevronDown, ChevronUp, Terminal, Loader2, Clock } from "lucide-react";
+import { ExternalLink, Pause, Trash2, ChevronDown, ChevronUp, Terminal, Loader2, Clock } from "lucide-react";
 import { type Session, api } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,12 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
   };
 
   const handleStop = async () => {
-    await api.stopSession(session.id);
+    await api.pauseSession(session.id);
+    setLog(prev => prev.length ? [...prev, "[launchpad] Session paused\n"] : prev);
+  };
+
+  const handleDelete = async () => {
+    await api.deleteSession(session.id);
     onRemove(session.id);
   };
 
@@ -89,17 +94,28 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
             </div>
           </div>
 
-          {session.status !== "stopped" && session.status !== "error" && (
+          <div className="flex shrink-0 items-center gap-1">
+            {session.status !== "stopped" && session.status !== "error" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleStop}
+                title="Pause session"
+              >
+                <Pause className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
-              className="shrink-0 h-8 w-8 text-destructive hover:text-destructive"
-              onClick={handleStop}
-              title="Stop session"
+              className="h-8 w-8 text-destructive hover:text-destructive"
+              onClick={handleDelete}
+              title="Delete session"
             >
-              <Square className="h-3.5 w-3.5 fill-current" />
+              <Trash2 className="h-3.5 w-3.5" />
             </Button>
-          )}
+          </div>
         </div>
 
         {/* Open button */}
