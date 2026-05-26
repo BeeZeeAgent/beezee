@@ -2,23 +2,26 @@
 
 # BeeZee
 
-BeeZee is an agent orchestrator, observability and convenience tool. It runs a local web server, detects available coding agents such as Claude Code and Codex, and gives you one place to launch, resume, and monitor sessions.
+BeeZee is an agent orchestrator, observability and convenience tool. I tried to scratch my own itch(es), maybe it will be useful for You, too. :) It runs a local web server, detects available coding agents such as Claude Code and Codex, and gives you one place to launch, resume, and monitor sessions.
 
 ## Who is it for?
 
-BeeZee is mainly for developers and small teams who run agentic coding tools across multiple machines and want clearer remote access, session visibility, and usage insight.
+The target audience are mainly developers and small white collar teams who manage multiple agentic machines, work remotely and would like some clarity and convenience around agentic interactions.
 
 ## Why?
 
-I use multiple harnesses in parallel, often on the same project. I also practice "mobile coding": exposing my dev machine through Tailscale and continuing work from a phone or another device. A few things are still frustrating in that workflow:
+I use multiple harnesses in parallel, often on the same project. I also practice "movibe coding" (sorry) by exposing my dev machine through Tailscale and continuing work from a phone or another device. A few things are still frustrating in that workflow:
 
 1. Devices usually need to be on the same private network before they can reach a dev node.
-2. Harnesses do not see each other's sessions, so continuing a Claude Code thread in Codex is not ergonomic.
-3. Token consumption is opaque.
+2. Harnesses do not see each other's sessions, so continuing a CC thread in Codex is not ergonomic.
+3. Token consumption is opaque. I want to see how much tokens have been spent on what and later analyse and optimise usage.
 4. Starting a remote session from mobile usually means navigating folders and SSHing manually.
 5. MCP servers and other tools can clutter context unless they are managed deliberately.
 
-BeeZee focuses on the local orchestration side: folders, sessions, remote terminals, harness launchers, and usage visibility. For access from arbitrary devices without joining your private network, use the BeeZee Cloud Relay at `https://app.beezyai.net`.
+BeeZee focuses on the local orchestration side: folders, sessions, remote terminals, harness launchers, and usage visibility. For access from arbitrary devices without joining your private network, use the BeeZee Cloud Relay at `https://app.beezyai.net`. Disclaimer: it's a paywalled service, you can decide if it worths the few bucks. 
+
+## Vision
+My goal eventually is to build an ecosystem that supports individuals and small businesses to unlock the full potential of the agentic arsenal with keeping their token consumption at bay, which in the current frenzy is kind skimmed over. And I'm convinced that at least a subset of tasks could be achieved with 50-80% less tokens without quality issues.
 
 ## Install
 
@@ -61,7 +64,7 @@ bun server.js
 Tailscale is the simplest self-managed option when every device that needs access can join your tailnet.
 
 1. Install Tailscale on the machine running BeeZee.
-2. Install Tailscale on the phone, tablet, laptop, or desktop you want to use remotely.
+2. Install Tailscale on the phone, tablet, laptop, or whatever you want to use remotely.
 3. Sign in to the same tailnet on every device.
 4. Start BeeZee on the dev machine.
 5. Find the dev machine's Tailscale address:
@@ -82,7 +85,7 @@ You can also use the machine's MagicDNS name if MagicDNS is enabled:
 http://<machine-name>.<tailnet-name>.ts.net:4242
 ```
 
-This keeps traffic inside your private Tailscale network. It is free for many personal setups and gives you full control, but every device must be joined to the tailnet.
+This keeps traffic inside your private Tailscale network. It is free for personal setups and gives you full control, but every device must be joined to the tailnet.
 
 ## Remote Access With BeeZee Cloud Relay
 
@@ -94,6 +97,7 @@ Use the BeeZee Cloud Relay when you want to access a local BeeZee node from a br
 4. Click **Add instance**.
 5. Follow the pairing link or copy the pairing URL into the browser where local BeeZee is open.
 6. Confirm the pairing dialog in the local BeeZee app.
+7. Dance!
 
 After pairing, BeeZee stores the relay configuration locally in:
 
@@ -120,10 +124,16 @@ BeeZee scans your local machine and exposes your folder structure through a web 
 
 Claude Code supports native remote mode, and Codex supports native remote mode on macOS. BeeZee tries those native paths first and falls back to a PTY-based browser terminal when needed.
 
-BeeZee also applies practical optimizations around tool calls, such as trimming very long tool outputs and prefetching relevant metadata for files and folders. The goal is to reduce wasted round trips and make agent sessions easier to observe.
+BeeZee also applies practical optimizations around tool calls (ok not yet exactly... I use [https://github.com/rtk-ai/rtk] ATM which shall be separately installed), such as trimming very long tool outputs and prefetching relevant metadata for files and folders. The goal is to reduce wasted round trips and make agent sessions easier to observe.
 
 ## Updating
 
 BeeZee checks GitHub releases for newer versions. Starting with version `0.4.1`, the local app shows an update banner when a newer release is available.
 
 Versions before `0.4.1` cannot show the banner, so update once manually from the GitHub releases page if you are on an older build.
+
+## Other disclaimers
+As you can see this is a brand new repo and most of the code was written by Claude Code and Codex - that's why I created this tool. However I've been working on similar projects for a while, so it's not like Athene who just jumped out of her daddy's head. I'm aware that there are literally dozens of similar attempts on the internet. I've even tried a few. Yet, I wasn't fully satisified with any of them. So here we are. 
+
+Again it's a fresh project so excpect a higher density of bugs. I started to work on a comprehensive test suite, but since my budget and therefore my token limits are narrower I'm focusing on delivering those features that I deem essential first. 
+
