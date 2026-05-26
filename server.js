@@ -342,6 +342,30 @@ const AGENTS = {
 // ── Codex usage proxy ─────────────────────────────────────────────────────
 
 const CODEX_USAGE_PATH = path.join(HOME, '.beezee-codex-usage.json');
+const CODEX_CONFIG_PATH = path.join(HOME, '.codex', 'config.toml');
+let codexSessionCount = 0;
+
+function setCodexProxyConfig(enable) {
+  const proxyUrl = `http://localhost:${PORT}/codex-proxy/v1`;
+  try {
+    let config = '';
+    try { config = fs.readFileSync(CODEX_CONFIG_PATH, 'utf8'); } catch {}
+    const hasUrl = /^base_url\s*=/m.test(config);
+    if (enable) {
+      if (hasUrl) {
+        config = config.replace(/^base_url\s*=.*$/m, `base_url = "${proxyUrl}"`);
+      } else {
+        config = `base_url = "${proxyUrl}"\n` + config;
+      }
+    } else {
+      // Remove our proxy URL, leave any other base_url intact
+      config = config.replace(new RegExp(`^base_url\\s*=\\s*"${proxyUrl.replace(/\//g, '\\/')}"\n?`, 'm'), '');
+    }
+    fs.writeFileSync(CODEX_CONFIG_PATH, config);
+  } catch (e) {
+    console.warn('[Codex proxy] Could not modify config.toml:', e.message);
+  }
+}
 
 function captureCodexUsage(usage, model) {
   let store = { modelUsage: {}, dailyUsage: [] };
@@ -627,6 +651,11 @@ app.post('/api/sessions', async (req, res) => {
 
   const id = nextId++;
 
+  if (tool === 'codex') {
+    codexSessionCount++;
+    if (codexSessionCount === 1) setCodexProxyConfig(true);
+  }
+
   const proc = spawn(cmd, args, {
     cwd: workDir,
     env: {
@@ -635,8 +664,6 @@ app.post('/api/sessions', async (req, res) => {
       // Strip color codes in native mode so the log buffer stays readable;
       // in ttyd mode the terminal handles rendering so leave colors intact.
       ...(mode === 'native' ? { FORCE_COLOR: '0', NO_COLOR: '1' } : {}),
-      // Route Codex API calls through local proxy to capture token usage
-      ...(tool === 'codex' ? { OPENAI_BASE_URL: `http://localhost:${PORT}/codex-proxy/v1` } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -714,6 +741,10 @@ app.post('/api/sessions', async (req, res) => {
   });
 
   proc.on('exit', (code) => {
+    if (tool === 'codex') {
+      codexSessionCount = Math.max(0, codexSessionCount - 1);
+      if (codexSessionCount === 0) setCodexProxyConfig(false);
+    }
     const s = sessions.get(id);
     if (s) {
       s.status = 'stopped';
