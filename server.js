@@ -71,8 +71,11 @@ function getFreePort() {
   });
 }
 
+const IS_WIN = process.platform === 'win32';
+
 function which(bin) {
-  try { return execSync(`which ${bin}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return null; }
+  const cmd = IS_WIN ? `where "${bin}"` : `which ${bin}`;
+  try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split(/\r?\n/)[0] || null; } catch { return null; }
 }
 
 function readUsageStats() {
@@ -97,7 +100,7 @@ function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-function stopSessionProcess(s, signal = 'SIGTERM') {
+function stopSessionProcess(s, signal = IS_WIN ? 'SIGKILL' : 'SIGTERM') {
   if (s.ptyId != null) killPty(s.ptyId);
   try {
     if (s.proc) s.proc.kill(signal);
@@ -278,9 +281,9 @@ const AGENTS = {
     label: 'Codex',
     binary: 'codex',
     // Native remote-control requires the standalone installer binary, not the npm version
-    isInstalled: () => !!which('codex') || fs.existsSync(path.join(HOME, '.codex/packages/standalone/current/codex')),
-    nativeAvailable: () => fs.existsSync(path.join(HOME, '.codex/packages/standalone/current/codex')),
-    nativeBin: () => path.join(HOME, '.codex/packages/standalone/current/codex'),
+    isInstalled: () => !!which('codex') || fs.existsSync(path.join(HOME, '.codex', 'packages', 'standalone', 'current', IS_WIN ? 'codex.exe' : 'codex')),
+    nativeAvailable: () => fs.existsSync(path.join(HOME, '.codex', 'packages', 'standalone', 'current', IS_WIN ? 'codex.exe' : 'codex')),
+    nativeBin: () => path.join(HOME, '.codex', 'packages', 'standalone', 'current', IS_WIN ? 'codex.exe' : 'codex'),
     nativeArgs: () => ['remote-control', 'start', '--json'],
     urlPattern: /https:\/\/[^\s\x00-\x1F"']+/,
     installHint: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',

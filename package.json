@@ -6,13 +6,6 @@
   "bin": {
     "beezee": "./server.js"
   },
-  "files": [
-    "server.js",
-    "agentSessionSync.js",
-    "pty-manager.js",
-    "terminal.html",
-    "frontend/dist"
-  ],
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",

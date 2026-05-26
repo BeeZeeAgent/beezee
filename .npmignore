@@ -1,0 +1,26 @@
+# Include everything not excluded below
+node_modules/
+frontend/node_modules/
+frontend/src/
+frontend/public/
+frontend/index.html
+frontend/vite.config.ts
+frontend/tsconfig*.json
+frontend/package*.json
+frontend/components.json
+frontend/eslint.config.js
+frontend/postcss.config.js
+frontend/tailwind.config.js
+frontend/README.md
+cloud-relay/
+.env
+.env.*
+data/
+*.sqlite
+*.db
+*.log
+*.tgz
+start.sh
+# Explicitly un-ignore the built frontend
+!frontend/dist/
+!frontend/dist/**

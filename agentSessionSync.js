@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { homedir } from 'os';
 
-const HOME = process.env.HOME || '/home/pi';
+const HOME = homedir();
 const CONFIG_PATH = path.join(HOME, '.launchpad-agent-sync.json');
 const STATE_PATH = path.join(HOME, '.launchpad-agent-sync-state.json');
 const SYNC_MARKER = 'launchpad-sync';
@@ -79,7 +80,7 @@ function isEnvironmentContext(text) {
 const AGENT_SCHEMAS = {
   codex: {
     id: 'codex',
-    root: path.join(HOME, '.codex/sessions'),
+    root: path.join(HOME, '.codex', 'sessions'),
     files() {
       return walkFiles(this.root, file => file.endsWith('.jsonl') && !path.basename(file).startsWith(`${SYNC_MARKER}-`));
     },
@@ -151,11 +152,11 @@ const AGENT_SCHEMAS = {
   },
   claude: {
     id: 'claude',
-    root: path.join(HOME, '.claude/projects'),
+    root: path.join(HOME, '.claude', 'projects'),
     files() {
       return walkFiles(this.root, file => {
         const name = path.basename(file);
-        return file.endsWith('.jsonl') && !file.includes('/subagents/') && !name.startsWith(`${SYNC_MARKER}-`);
+        return file.endsWith('.jsonl') && !file.includes(path.sep + 'subagents' + path.sep) && !name.startsWith(`${SYNC_MARKER}-`);
       });
     },
     read(file) {
