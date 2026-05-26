@@ -37,7 +37,7 @@ export function PairDialog({ code, relayUrl, onDone }: Props) {
             Connect to cloud relay
           </DialogTitle>
           <DialogDescription>
-            This will link this Launchpad to <strong>{relayHost}</strong> so you can access it remotely.
+            This will link this BeeZee to <strong>{relayHost}</strong> so you can access it remotely.
           </DialogDescription>
         </DialogHeader>
 
@@ -45,7 +45,7 @@ export function PairDialog({ code, relayUrl, onDone }: Props) {
           <div className="flex flex-col items-center gap-3 py-4">
             <div className="text-green-600 font-semibold">Connected as "{message}"</div>
             <p className="text-sm text-muted-foreground text-center">
-              Launchpad is now reachable through the relay. You can close this dialog.
+              BeeZee is now reachable through the relay. You can close this dialog.
             </p>
             <Button onClick={onDone}>Done</Button>
           </div>
