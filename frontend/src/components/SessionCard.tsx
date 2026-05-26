@@ -62,7 +62,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
         <div className="flex min-w-0 items-start gap-3 p-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1 min-w-0 overflow-hidden">
-              <span className="flex-1 min-w-0 truncate text-sm font-medium">{session.name}</span>
+              <span className="text-sm font-medium shrink-0">{session.name.length > 28 ? session.name.slice(0, 28) + "…" : session.name}</span>
               <span className={cn(
                 "shrink-0 text-xs px-1.5 py-0.5 rounded-full border font-medium",
                 STATUS_COLORS[session.status]
