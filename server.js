@@ -68,6 +68,23 @@ function which(bin) {
   try { return execSync(`which ${bin}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return null; }
 }
 
+function readUsageStats() {
+  const claudeCachePath = path.join(HOME, '.claude', 'stats-cache.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(claudeCachePath, 'utf8'));
+    return {
+      updatedAt: new Date().toISOString(),
+      claude: {
+        totalSessions: data.totalSessions || 0,
+        totalMessages: data.totalMessages || 0,
+        modelUsage: data.modelUsage || {},
+        dailyActivity: (data.dailyActivity || []).slice(-30),
+        dailyModelTokens: (data.dailyModelTokens || []).slice(-30),
+      },
+    };
+  } catch { return null; }
+}
+
 function isProcessAlive(pid) {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -214,6 +231,15 @@ function startCloudRelayConnector() {
 
     ws.addEventListener('open', () => {
       console.log(`[Relay] Connected as ${relayConfig.nodeId}`);
+      const sendUsage = () => {
+        const stats = readUsageStats();
+        if (stats) {
+          try { ws.send(JSON.stringify({ type: 'usage_update', data: { updatedAt: stats.updatedAt, claude: { totalSessions: stats.claude.totalSessions, totalMessages: stats.claude.totalMessages, modelUsage: stats.claude.modelUsage } } })); } catch {}
+        }
+      };
+      sendUsage();
+      const usageTimer = setInterval(sendUsage, 5 * 60 * 1000);
+      ws.addEventListener('close', () => clearInterval(usageTimer), { once: true });
     });
 
     ws.addEventListener('message', async (event) => {
@@ -624,6 +650,11 @@ app.get('/api/sessions/:id/log', (req, res) => {
   if (!s) return res.status(404).json({ error: 'Session not found' });
   if (s.status === 'running' || s.status === 'starting') s.lastActivityAt = Date.now();
   res.json({ log: s.log });
+});
+
+app.get('/api/usage', (_req, res) => {
+  const stats = readUsageStats();
+  res.json(stats ?? { updatedAt: new Date().toISOString(), claude: null });
 });
 
 app.get('/api/relay/status', (_req, res) => {

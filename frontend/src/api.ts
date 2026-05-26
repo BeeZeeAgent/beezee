@@ -46,6 +46,24 @@ export interface AgentSession {
   agentSessions: Record<string, string>;
 }
 
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+}
+
+export interface UsageData {
+  updatedAt: string;
+  claude: {
+    totalSessions: number;
+    totalMessages: number;
+    modelUsage: Record<string, ModelUsage>;
+    dailyActivity: Array<{ date: string; messageCount: number; sessionCount: number; toolCallCount: number }>;
+    dailyModelTokens: Array<{ date: string; tokensByModel: Record<string, number> }>;
+  } | null;
+}
+
 export interface SessionSyncStatus {
   enabled: boolean;
   intervalMs: number;
@@ -98,6 +116,9 @@ export const api = {
 
   relayStatus: (): Promise<{ configured: boolean; url: string; nodeId: string }> =>
     fetch(`${BASE}/api/relay/status`).then(r => r.json()),
+
+  getUsage: (): Promise<UsageData> =>
+    fetch(`${BASE}/api/usage`).then(r => r.json()),
 
   upload: (dest: string, files: File[], relativePaths: string[]): Promise<{ ok: boolean; count: number }> => {
     const form = new FormData();
