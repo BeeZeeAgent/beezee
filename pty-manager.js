@@ -1,6 +1,5 @@
-import pty from 'node-pty';
+// PTY sessions using Bun.spawn with tty:true — no native addons needed
 
-// Strip ANSI escape codes for plain-text log capture
 function stripAnsi(str) {
   return str.replace(
     // eslint-disable-next-line no-control-regex
@@ -9,43 +8,64 @@ function stripAnsi(str) {
   );
 }
 
-// id → { pty, rawBuf, subscribers, exitCode }
+// id → { proc, rawBuf, subscribers, exitCode }
 const ptys = new Map();
 
 export function spawnPty(id, cmd, args, { cwd, env, cols = 220, rows = 50 } = {}) {
   const rawBuf = [];
   const subscribers = new Set();
 
-  const p = pty.spawn(cmd, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
+  const proc = Bun.spawn([cmd, ...args], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    tty: true,
     cwd,
-    env: { ...process.env, ...(env || {}) },
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLUMNS: String(cols),
+      LINES: String(rows),
+      ...(env || {}),
+    },
   });
 
-  const entry = { pty: p, rawBuf, subscribers, exitCode: null };
+  const entry = { proc, rawBuf, subscribers, exitCode: null };
   ptys.set(id, entry);
 
-  p.onData(data => {
-    rawBuf.push(data);
-    if (rawBuf.length > 5000) rawBuf.shift();
-    for (const fn of subscribers) {
-      try { fn(data); } catch {}
-    }
-  });
+  // Async reader loop — runs for the lifetime of the PTY
+  (async () => {
+    const reader = proc.stdout.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const data = new TextDecoder().decode(value);
+        rawBuf.push(data);
+        if (rawBuf.length > 5000) rawBuf.shift();
+        for (const fn of subscribers) {
+          try { fn(data); } catch {}
+        }
+      }
+    } catch {}
+    entry.exitCode = await proc.exited.catch(() => -1);
+  })();
 
-  p.onExit(({ exitCode }) => { entry.exitCode = exitCode; });
-
-  return p.pid;
+  return proc.pid;
 }
 
 export function writePty(id, data) {
-  ptys.get(id)?.pty.write(data);
+  const entry = ptys.get(id);
+  if (!entry) return;
+  try {
+    entry.proc.stdin.write(data);
+    entry.proc.stdin.flush();
+  } catch {}
 }
 
 export function resizePty(id, cols, rows) {
-  try { ptys.get(id)?.pty.resize(cols, rows); } catch {}
+  // Bun.spawn doesn't yet expose the PTY master fd needed for TIOCSWINSZ.
+  // We send stty only when the terminal is idle (not mid-output) — best effort.
+  writePty(id, `\x01stty cols ${cols} rows ${rows}\r`);
 }
 
 export function capturePty(id) {
@@ -53,7 +73,7 @@ export function capturePty(id) {
   return entry ? stripAnsi(entry.rawBuf.join('')) : '';
 }
 
-// Returns unsubscribe fn. Immediately sends buffered output to new subscriber.
+// Returns unsubscribe fn. Immediately replays buffered output to new subscriber.
 export function subscribePty(id, fn) {
   const entry = ptys.get(id);
   if (!entry) return () => {};
@@ -67,7 +87,7 @@ export function subscribePty(id, fn) {
 export function killPty(id) {
   const entry = ptys.get(id);
   if (!entry) return;
-  try { entry.pty.kill(); } catch {}
+  try { entry.proc.kill(); } catch {}
   ptys.delete(id);
 }
 

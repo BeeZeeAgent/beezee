@@ -9,3 +9,5 @@ data/
 *.sqlite
 *.db
 *.log
+beezee
+beezee-*.tgz
