@@ -128,7 +128,34 @@ export function Usage() {
           </div>
         </div>
 
-        <p className="text-xs text-muted-foreground text-center pb-2">Source: Claude Code · ~/.claude/stats-cache.json</p>
+        <p className="text-xs text-muted-foreground text-center">Source: Claude Code · ~/.claude/stats-cache.json</p>
+
+        {/* Codex section */}
+        {data?.codex ? (
+          <>
+            <div className="border-t pt-4">
+              <p className="text-sm font-semibold mb-3">Codex</p>
+              <div className="space-y-2">
+                {Object.entries(data.codex.modelUsage).map(([model, usage]) => (
+                  <div key={model} className="rounded-lg border bg-card p-3">
+                    <p className="text-sm font-medium mb-2">{model}</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      <span className="text-muted-foreground">Input</span>
+                      <span className="text-right tabular-nums">{fmt(usage.promptTokens)}</span>
+                      <span className="text-muted-foreground">Output</span>
+                      <span className="text-right tabular-nums">{fmt(usage.completionTokens)}</span>
+                      <span className="text-muted-foreground">Requests</span>
+                      <span className="text-right tabular-nums">{usage.requests.toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground text-center pb-2">Source: Codex proxy · ~/.beezee-codex-usage.json</p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground text-center pb-2">Codex: start a Codex session to begin tracking</p>
+        )}
       </div>
     </ScrollArea>
   );

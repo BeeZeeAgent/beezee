@@ -233,9 +233,13 @@ function startCloudRelayConnector() {
       console.log(`[Relay] Connected as ${relayConfig.nodeId}`);
       const sendUsage = () => {
         const stats = readUsageStats();
-        if (stats) {
-          try { ws.send(JSON.stringify({ type: 'usage_update', data: { updatedAt: stats.updatedAt, claude: { totalSessions: stats.claude.totalSessions, totalMessages: stats.claude.totalMessages, modelUsage: stats.claude.modelUsage } } })); } catch {}
-        }
+        const codexStats = readCodexUsageStats();
+        const snapshot = {
+          updatedAt: new Date().toISOString(),
+          claude: stats?.claude ? { totalSessions: stats.claude.totalSessions, totalMessages: stats.claude.totalMessages, modelUsage: stats.claude.modelUsage } : null,
+          codex: codexStats,
+        };
+        try { ws.send(JSON.stringify({ type: 'usage_update', data: snapshot })); } catch {}
       };
       sendUsage();
       const usageTimer = setInterval(sendUsage, 5 * 60 * 1000);
@@ -334,6 +338,105 @@ const AGENTS = {
     installUrl: 'https://chatgpt.com/codex',
   },
 };
+
+// ── Codex usage proxy ─────────────────────────────────────────────────────
+
+const CODEX_USAGE_PATH = path.join(HOME, '.beezee-codex-usage.json');
+
+function captureCodexUsage(usage, model) {
+  let store = { modelUsage: {}, dailyUsage: [] };
+  try { store = JSON.parse(fs.readFileSync(CODEX_USAGE_PATH, 'utf8')); } catch {}
+  if (!store.modelUsage) store.modelUsage = {};
+  if (!store.dailyUsage) store.dailyUsage = [];
+  const m = model || 'unknown';
+  if (!store.modelUsage[m]) store.modelUsage[m] = { promptTokens: 0, completionTokens: 0, requests: 0 };
+  store.modelUsage[m].promptTokens += usage.prompt_tokens || 0;
+  store.modelUsage[m].completionTokens += usage.completion_tokens || 0;
+  store.modelUsage[m].requests += 1;
+  const today = new Date().toISOString().slice(0, 10);
+  let dayEntry = store.dailyUsage.find(d => d.date === today);
+  if (!dayEntry) { dayEntry = { date: today, totalTokens: 0, requests: 0 }; store.dailyUsage.push(dayEntry); }
+  dayEntry.totalTokens += (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
+  dayEntry.requests += 1;
+  store.dailyUsage = store.dailyUsage.slice(-30);
+  store.updatedAt = new Date().toISOString();
+  try { fs.writeFileSync(CODEX_USAGE_PATH, JSON.stringify(store, null, 2)); } catch {}
+}
+
+function readCodexUsageStats() {
+  try { return JSON.parse(fs.readFileSync(CODEX_USAGE_PATH, 'utf8')); } catch { return null; }
+}
+
+// Must be registered before app.use(express.json()) so express.raw() gets the body first
+app.all('/codex-proxy/v1/*', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+  let bodyObj = null;
+  try { if (req.body?.length) bodyObj = JSON.parse(req.body.toString()); } catch {}
+
+  const isStreaming = bodyObj?.stream === true;
+  let outBody = req.body;
+  if (isStreaming && bodyObj) {
+    bodyObj.stream_options = { ...(bodyObj.stream_options || {}), include_usage: true };
+    outBody = Buffer.from(JSON.stringify(bodyObj));
+  }
+
+  const targetPath = req.path.replace(/^\/codex-proxy/, '');
+  const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const upstreamUrl = `https://api.openai.com${targetPath}${query}`;
+
+  const fwdHeaders = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (['host', 'connection', 'content-length'].includes(k.toLowerCase())) continue;
+    fwdHeaders[k] = v;
+  }
+  if (outBody?.length) fwdHeaders['content-length'] = String(outBody.length);
+
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(upstreamUrl, {
+      method: req.method,
+      headers: fwdHeaders,
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : outBody,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Proxy error: ${err.message}` });
+  }
+
+  res.status(upstreamRes.status);
+  for (const [k, v] of upstreamRes.headers) {
+    if (['transfer-encoding', 'connection', 'content-encoding'].includes(k.toLowerCase())) continue;
+    res.setHeader(k, v);
+  }
+
+  if (isStreaming && upstreamRes.body) {
+    const reader = upstreamRes.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+        sseBuffer += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      res.end();
+    }
+    for (const line of sseBuffer.split('\n')) {
+      if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (data.usage?.total_tokens > 0) { captureCodexUsage(data.usage, bodyObj?.model || data.model); break; }
+      } catch {}
+    }
+  } else {
+    const bodyBuf = Buffer.from(await upstreamRes.arrayBuffer());
+    res.send(bodyBuf);
+    try {
+      const data = JSON.parse(bodyBuf.toString());
+      if (data.usage) captureCodexUsage(data.usage, data.model || bodyObj?.model);
+    } catch {}
+  }
+});
 
 // ── Filesystem browse ─────────────────────────────────────────────────────
 
@@ -532,6 +635,8 @@ app.post('/api/sessions', async (req, res) => {
       // Strip color codes in native mode so the log buffer stays readable;
       // in ttyd mode the terminal handles rendering so leave colors intact.
       ...(mode === 'native' ? { FORCE_COLOR: '0', NO_COLOR: '1' } : {}),
+      // Route Codex API calls through local proxy to capture token usage
+      ...(tool === 'codex' ? { OPENAI_BASE_URL: `http://localhost:${PORT}/codex-proxy/v1` } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -654,7 +759,10 @@ app.get('/api/sessions/:id/log', (req, res) => {
 
 app.get('/api/usage', (_req, res) => {
   const stats = readUsageStats();
-  res.json(stats ?? { updatedAt: new Date().toISOString(), claude: null });
+  res.json({
+    ...(stats ?? { updatedAt: new Date().toISOString(), claude: null }),
+    codex: readCodexUsageStats(),
+  });
 });
 
 app.get('/api/relay/status', (_req, res) => {

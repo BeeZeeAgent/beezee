@@ -53,6 +53,12 @@ export interface ModelUsage {
   cacheCreationInputTokens: number;
 }
 
+export interface CodexModelUsage {
+  promptTokens: number;
+  completionTokens: number;
+  requests: number;
+}
+
 export interface UsageData {
   updatedAt: string;
   claude: {
@@ -61,6 +67,11 @@ export interface UsageData {
     modelUsage: Record<string, ModelUsage>;
     dailyActivity: Array<{ date: string; messageCount: number; sessionCount: number; toolCallCount: number }>;
     dailyModelTokens: Array<{ date: string; tokensByModel: Record<string, number> }>;
+  } | null;
+  codex: {
+    updatedAt: string;
+    modelUsage: Record<string, CodexModelUsage>;
+    dailyUsage: Array<{ date: string; totalTokens: number; requests: number }>;
   } | null;
 }
 
