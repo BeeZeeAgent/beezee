@@ -3,13 +3,13 @@ import { spawn, spawnSync, execSync } from 'child_process';
 import { createServer } from 'net';
 import fs from 'fs';
 import path from 'path';
-import { networkInterfaces } from 'os';
+import { networkInterfaces, homedir } from 'os';
 import multer from 'multer';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
 
 const app = express();
 const PORT = 4242;
-const HOME = process.env.HOME || '/home/pi';
+const HOME = homedir();
 
 const RELAY_CONFIG_PATH = path.join(HOME, '.launchpad-relay.json');
 
@@ -492,6 +492,64 @@ app.get('/api/agents', (_req, res) => {
     installHint: a.installHint,
     installUrl: a.installUrl,
   })));
+});
+
+app.get('/api/home', (req, res) => res.json({ home: HOME }));
+
+const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.next', 'dist', 'build', 'out',
+  'target', '.cargo', 'vendor', 'venv', '.venv', 'env', '.tox', 'coverage', '.nyc_output']);
+let dirIndexCache = null;
+let dirIndexCacheAt = 0;
+const DIR_INDEX_TTL = 10 * 60 * 1000;
+
+async function buildDirIndex(root) {
+  const dirs = [];
+  const walk = async (dir, depth) => {
+    if (depth > 5) return;
+    let entries;
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      dirs.push(full);
+      await walk(full, depth + 1);
+    }
+  };
+  await walk(root, 0);
+  return dirs;
+}
+
+function fuzzyScore(str, query) {
+  const s = str.toLowerCase();
+  const q = query.toLowerCase();
+  const base = path.basename(s);
+  if (base === q) return 3;
+  if (base.startsWith(q)) return 2;
+  if (s.includes(q)) return 1;
+  // chars in order
+  let qi = 0;
+  for (let i = 0; i < s.length && qi < q.length; i++) {
+    if (s[i] === q[qi]) qi++;
+  }
+  return qi === q.length ? 0 : -1;
+}
+
+app.get('/api/search-dirs', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [] });
+  const now = Date.now();
+  if (!dirIndexCache || now - dirIndexCacheAt > DIR_INDEX_TTL) {
+    dirIndexCache = await buildDirIndex(HOME);
+    dirIndexCacheAt = now;
+  }
+  const scored = [];
+  for (const p of dirIndexCache) {
+    const score = fuzzyScore(p, q);
+    if (score >= 0) scored.push({ path: p, name: path.basename(p), score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.path.length - b.path.length);
+  res.json({ results: scored.slice(0, 50).map(({ path: p, name }) => ({ path: p, name })) });
 });
 
 app.get('/api/browse', (req, res) => {

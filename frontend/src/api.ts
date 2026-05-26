@@ -87,8 +87,14 @@ export interface SessionSyncStatus {
 const BASE = import.meta.env.DEV ? "http://localhost:4242" : "";
 
 export const api = {
+  getHome: (): Promise<{ home: string }> =>
+    fetch(`${BASE}/api/home`).then(r => r.json()),
+
   browse: (path: string, hidden = false): Promise<BrowseResult> =>
     fetch(`${BASE}/api/browse?path=${encodeURIComponent(path)}&hidden=${hidden}`).then(r => r.json()),
+
+  searchDirs: (q: string): Promise<{ results: { path: string; name: string }[] }> =>
+    fetch(`${BASE}/api/search-dirs?q=${encodeURIComponent(q)}`).then(r => r.json()),
 
   getAgents: (): Promise<Agent[]> =>
     fetch(`${BASE}/api/agents`).then(r => r.json()),

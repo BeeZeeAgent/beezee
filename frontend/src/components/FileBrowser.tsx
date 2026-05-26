@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ChevronRight, FolderOpen, File, Home, ArrowLeft, Rocket, Search, X, Upload, Files, FolderInput } from "lucide-react";
+import { ChevronRight, FolderOpen, File, Home, ArrowLeft, Rocket, Search, X, Upload, Files, FolderInput, Loader2 } from "lucide-react";
 import { api, type BrowseItem } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,13 +11,14 @@ interface FileBrowserProps {
   onLaunch: (dir: string) => void;
 }
 
-const HOME = "/home/pi";
-
 export function FileBrowser({ onLaunch }: FileBrowserProps) {
-  const [currentPath, setCurrentPath] = useState(HOME);
-  const [parent, setParent] = useState("/home");
+  const [home, setHome] = useState("");
+  const [currentPath, setCurrentPath] = useState("");
+  const [parent, setParent] = useState("");
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ path: string; name: string }[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadDropdown, setUploadDropdown] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
     setLoading(true);
     setError(null);
     setUploadDropdown(null);
+    setSearchResults(null);
     try {
       const result = await api.browse(path);
       setCurrentPath(result.path);
@@ -47,7 +49,24 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
     }
   }, []);
 
-  useEffect(() => { navigate(HOME); }, [navigate]);
+  useEffect(() => {
+    api.getHome().then(({ home: h }) => {
+      setHome(h);
+      navigate(h);
+    }).catch(() => navigate("/"));
+  }, [navigate]);
+
+  useEffect(() => {
+    if (query.length < 2) { setSearchResults(null); return; }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api.searchDirs(query)
+        .then(({ results }) => setSearchResults(results))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -71,11 +90,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
   };
 
   const pathParts = currentPath.split("/").filter(Boolean);
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredItems = normalizedQuery
-    ? items.filter(item => item.isDir && item.name.toLowerCase().includes(normalizedQuery))
-    : items;
-  const visibleFolderCount = filteredItems.filter(item => item.isDir).length;
+  const isDeepSearch = query.length >= 2;
 
   return (
     <div className="flex flex-col h-full">
@@ -85,7 +100,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 px-4 py-3 border-b overflow-x-auto">
-        <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => navigate(HOME)}>
+        <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => navigate(home)}>
           <Home className="h-3.5 w-3.5" />
         </Button>
         {pathParts.map((part, i) => {
@@ -150,19 +165,57 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
 
       {/* File list */}
       <ScrollArea className="flex-1">
-        {loading && (
+        {/* Deep search results */}
+        {isDeepSearch && (
+          <div className="py-1">
+            {searching && (
+              <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Searching…
+              </div>
+            )}
+            {!searching && searchResults !== null && searchResults.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-8">No folders match "{query}"</p>
+            )}
+            {!searching && searchResults && searchResults.length > 0 && (
+              <>
+                <p className="px-4 py-2 text-xs text-muted-foreground">{searchResults.length} folder{searchResults.length !== 1 ? "s" : ""} found</p>
+                {searchResults.map(result => (
+                  <div key={result.path} className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent transition-colors">
+                    <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => navigate(result.path)}>
+                      <p className="text-sm truncate">{result.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{result.path}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <Button size="sm" className="h-7 px-2.5 text-xs shrink-0" style={{ background: "#FFE566", color: "#000", border: "none" }} onClick={() => onLaunch(result.path)}>
+                        <Rocket className="h-3 w-3 mr-1" />Launch
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="Open folder" onClick={() => navigate(result.path)}>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Regular directory listing */}
+        {!isDeepSearch && loading && (
           <div className="flex items-center justify-center h-24 text-sm text-muted-foreground">
             Loading…
           </div>
         )}
-        {error && (
+        {!isDeepSearch && error && (
           <div className="flex items-center justify-center h-24 text-sm text-destructive">
             {error}
           </div>
         )}
-        {!loading && !error && (
+        {!isDeepSearch && !loading && !error && (
           <div className="py-1">
-            {currentPath !== "/" && (
+            {currentPath && currentPath !== "/" && (
               <>
                 <button
                   onClick={() => navigate(parent)}
@@ -177,15 +230,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
             {items.length === 0 && (
               <p className="text-center text-sm text-muted-foreground py-8">Empty directory</p>
             )}
-            {items.length > 0 && filteredItems.length === 0 && (
-              <p className="text-center text-sm text-muted-foreground py-8">No folders match "{query}"</p>
-            )}
-            {normalizedQuery && filteredItems.length > 0 && (
-              <p className="px-4 py-2 text-xs text-muted-foreground">
-                {visibleFolderCount} folder{visibleFolderCount === 1 ? "" : "s"} found
-              </p>
-            )}
-            {filteredItems.map((item) => (
+            {items.map((item) => (
               <div
                 key={item.path}
                 className={cn(
