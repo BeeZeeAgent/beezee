@@ -121,7 +121,7 @@ export function Sessions({ launchDir }: SessionsProps) {
           </div>
         ) : (
           <div className="min-w-0 space-y-3 p-3">
-            {sessions.map(s => (
+            {[...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt).map(s => (
               <SessionCard key={s.id} session={s} onRemove={handleRemove} />
             ))}
             <div className="rounded-lg border bg-card">
