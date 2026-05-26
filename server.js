@@ -120,32 +120,27 @@ async function runService(action) {
 }
 
 function runServiceWindows(action, bin) {
-  const taskName = 'BeeZee';
-  const vbsPath = path.join(path.dirname(bin), 'beezee-launcher.vbs');
+  const startupDir = path.join(
+    process.env.APPDATA || path.join(homedir(), 'AppData', 'Roaming'),
+    'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
+  );
+  const startupBin = path.join(startupDir, 'beezee.exe');
 
   if (action === 'install') {
-    // VBScript launches the exe with window style 0 (hidden)
-    fs.writeFileSync(vbsPath,
-      `Set WShell = CreateObject("WScript.Shell")\r\n` +
-      `WShell.Run """${bin}""", 0, False\r\n`
-    );
-    spawnSync('schtasks', [
-      '/create', '/f',
-      '/tn', taskName,
-      '/tr', `wscript.exe "${vbsPath}"`,
-      '/sc', 'onlogon',
-      '/rl', 'limited',
-    ], { stdio: 'inherit' });
-    console.log(`Service installed. BeeZee will start automatically on login.`);
+    fs.mkdirSync(startupDir, { recursive: true });
+    fs.copyFileSync(bin, startupBin);
+    console.log(`Service installed to startup folder.`);
+    console.log(`BeeZee will launch automatically on next login.`);
     console.log(`Run now: beezee service start`);
 
   } else if (action === 'uninstall') {
-    spawnSync('schtasks', ['/delete', '/f', '/tn', taskName], { stdio: 'inherit' });
-    try { fs.unlinkSync(vbsPath); } catch {}
-    console.log('Service removed.');
+    try { fs.unlinkSync(startupBin); } catch {}
+    console.log('Service removed from startup folder.');
 
   } else if (action === 'start') {
-    spawnSync('schtasks', ['/run', '/tn', taskName], { stdio: 'inherit' });
+    const child = spawn(bin, [], { detached: true, stdio: 'ignore' });
+    child.unref();
+    console.log('BeeZee started in background.');
 
   } else if (action === 'stop') {
     spawnSync('taskkill', ['/f', '/im', path.basename(bin)], { stdio: 'inherit' });
@@ -1130,6 +1125,15 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   for (const ip of ips) console.log(`  Network: http://${ip}:${PORT}`);
   if (relayConfig.url && relayConfig.token) console.log(`  Relay:   ${relayConfig.url} (${relayConfig.nodeId})`);
   console.log();
+
+  // On Windows compiled with --windows-hide-console, no terminal is visible,
+  // so open the browser automatically so the user gets feedback.
+  if (process.platform === 'win32' && !process.stdout.isTTY) {
+    setTimeout(() => {
+      try { Bun.spawn(['cmd', '/c', 'start', '', `http://localhost:${PORT}`]); } catch {}
+    }, 800);
+  }
+
   stopCurrentRelay = startCloudRelayConnector();
   startSessionSyncLoop(() => {
     broadcast({ type: 'agent_sessions_updated' });
