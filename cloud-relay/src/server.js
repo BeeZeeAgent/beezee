@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { WebSocketServer } from "ws";
 import { createStripeCheckout, updateBilling, verifyStripeSignature } from "./billing.js";
-import { createSession, getAccountFromBearer, hashPassword, publicAccount, randomToken, slugify, verifyPassword } from "./auth.js";
+import { createSession, getAccountFromBearer, getAccountFromSessionToken, hashPassword, publicAccount, randomToken, slugify, verifyPassword } from "./auth.js";
 import { loadStore, mutateStore } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,7 @@ const RESERVED_SUBDOMAINS = new Set(["www", "app", APP_SUBDOMAIN].filter(Boolean
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 const STRIPE_PRICE_RELAY = process.env.STRIPE_PRICE_RELAY || "";
+const SESSION_COOKIE = "launchpad_relay_session";
 
 const app = express();
 const server = http.createServer(app);
@@ -31,10 +32,39 @@ const pendingProxy = new Map();
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function auth(req, res, next) {
-  const account = getAccountFromBearer(req.header("Authorization"));
+  const bearer = String(req.header("Authorization") || "").replace(/^Bearer\s+/i, "");
+  const bearerAccount = getAccountFromBearer(req.header("Authorization"));
+  const account = bearerAccount || getAccountFromCookie(req);
   if (!account) return res.status(401).json({ error: "Unauthorized" });
+  if (bearerAccount && bearer) setSessionCookie(res, bearer);
   req.account = account;
   next();
+}
+
+function parseCookies(req) {
+  return Object.fromEntries(String(req.header("cookie") || "")
+    .split(";")
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const idx = part.indexOf("=");
+      return idx === -1 ? [part, ""] : [part.slice(0, idx), decodeURIComponent(part.slice(idx + 1))];
+    }));
+}
+
+function getAccountFromCookie(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  return token ? getAccountFromSessionToken(token) : null;
+}
+
+function setSessionCookie(res, token) {
+  const secure = PUBLIC_URL.startsWith("https://") ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}${secure}`);
+}
+
+function clearSessionCookie(res) {
+  const secure = PUBLIC_URL.startsWith("https://") ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
 
 function send(ws, msg) {
@@ -68,6 +98,18 @@ function findInstanceBySubdomain(subdomain) {
     }
   }
   return null;
+}
+
+function requireInstanceOwner(req, res, found) {
+  const account = getAccountFromCookie(req);
+  if (account?.id === found.account.id) return account;
+
+  const acceptsHtml = String(req.header("accept") || "").includes("text/html");
+  if (!account && acceptsHtml && req.method === "GET") {
+    return res.redirect(`/?next=${encodeURIComponent(req.originalUrl || req.url || "/")}`);
+  }
+  if (!account) return res.status(401).send("Sign in to access this Launchpad");
+  return res.status(403).send("You do not have access to this Launchpad");
 }
 
 function publicInstance(account, inst) {
@@ -222,7 +264,9 @@ app.post("/api/auth/register", (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
-  res.json({ token: createSession(account.id), account: publicAccount(account) });
+  const token = createSession(account.id);
+  setSessionCookie(res, token);
+  res.json({ token, account: publicAccount(account) });
 });
 
 app.post("/api/auth/login", (req, res) => {
@@ -231,11 +275,18 @@ app.post("/api/auth/login", (req, res) => {
   if (!account || !verifyPassword(String(req.body.password || ""), account.passwordHash)) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
-  res.json({ token: createSession(account.id), account: publicAccount(account) });
+  const token = createSession(account.id);
+  setSessionCookie(res, token);
+  res.json({ token, account: publicAccount(account) });
 });
 
 app.get("/api/me", auth, (req, res) => {
   res.json({ account: publicAccount(req.account) });
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 
 // ── instances ─────────────────────────────────────────────────────────────────
@@ -474,12 +525,16 @@ async function proxyToNode(account, instanceToken, req, res, stripPrefix = "") {
 app.all("/r/:subdomain/*", (req, res) => {
   const found = findInstanceBySubdomain(req.params.subdomain);
   if (!found) return res.status(404).send("Unknown relay");
+  const owner = requireInstanceOwner(req, res, found);
+  if (!owner || res.headersSent) return;
   proxyToNode(found.account, found.instance.token, req, res, `/r/${req.params.subdomain}`);
 });
 
 app.all(["/i/:subdomain", "/i/:subdomain/*"], (req, res) => {
   const found = findInstanceBySubdomain(req.params.subdomain);
   if (!found) return res.status(404).send("Unknown relay");
+  const owner = requireInstanceOwner(req, res, found);
+  if (!owner || res.headersSent) return;
   proxyToNode(found.account, found.instance.token, req, res, `/i/${req.params.subdomain}`);
 });
 
@@ -492,6 +547,8 @@ app.use((req, res, next) => {
   if (!subdomain || RESERVED_SUBDOMAINS.has(subdomain)) return next();
   const found = findInstanceBySubdomain(subdomain);
   if (!found) return res.status(404).send("Unknown relay subdomain");
+  const owner = requireInstanceOwner(req, res, found);
+  if (!owner || res.headersSent) return;
   proxyToNode(found.account, found.instance.token, req, res);
 });
 

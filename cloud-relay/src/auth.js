@@ -44,14 +44,18 @@ export function createSession(accountId) {
   return signed;
 }
 
-export function getAccountFromBearer(header) {
-  const value = String(header || "").replace(/^Bearer\s+/i, "");
+export function getAccountFromSessionToken(value) {
   const [token, signature] = value.split(".");
   if (!token || signature !== sign(token)) return null;
   const store = loadStore();
   const session = store.sessions.find(s => s.token === token && s.expiresAt > Date.now());
   if (!session) return null;
   return store.accounts.find(a => a.id === session.accountId) || null;
+}
+
+export function getAccountFromBearer(header) {
+  const value = String(header || "").replace(/^Bearer\s+/i, "");
+  return getAccountFromSessionToken(value);
 }
 
 export function publicAccount(account) {

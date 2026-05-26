@@ -64,6 +64,11 @@ function AuthView({ onAuthed }: { onAuthed: (account: Account) => void }) {
         body: JSON.stringify(body),
       });
       localStorage.setItem(tokenKey, data.token);
+      const next = new URLSearchParams(window.location.search).get("next");
+      if (next?.startsWith("/i/") || next?.startsWith("/r/")) {
+        window.location.href = next;
+        return;
+      }
       onAuthed(data.account);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
@@ -302,7 +307,10 @@ function App() {
   const [account, setAccount] = useState<Account | null>(null);
   const [loading, setLoading] = useState(!!localStorage.getItem(tokenKey));
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
+    } catch {}
     localStorage.removeItem(tokenKey);
     setAccount(null);
   };
