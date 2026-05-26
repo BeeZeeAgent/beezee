@@ -13,6 +13,12 @@ import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop 
 import { spawnPty, writePty, resizePty, capturePty, subscribePty, killPty, isPtyAlive } from './pty-manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// When compiled with `bun build --compile`, import.meta.url resolves into Bun's
+// virtual FS (/$bunfs/root/...) where static files don't exist. Fall back to the
+// directory containing the executable so frontend/dist can live alongside it.
+const ASSETS_DIR = __dirname.startsWith('/$bunfs')
+  ? path.dirname(process.execPath)
+  : __dirname;
 
 const app = express();
 const PORT = 4242;
@@ -433,7 +439,7 @@ self.addEventListener('activate', event => {
 });
 `);
 });
-app.use(express.static(path.join(__dirname, 'frontend/dist')));
+app.use(express.static(path.join(ASSETS_DIR, 'frontend/dist')));
 
 app.get('/api/agents', (_req, res) => {
   res.json(Object.values(AGENTS).map(a => ({
@@ -810,13 +816,13 @@ app.get('/api/events', (req, res) => {
 // ── Built-in terminal (replaces ttyd) ─────────────────────────────────────
 
 app.get('/terminal/:id', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'terminal.html'));
+  res.sendFile(path.join(ASSETS_DIR, 'terminal.html'));
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────
 
 app.get('*', (_req, res) => {
-  const index = path.join(__dirname, 'frontend/dist/index.html');
+  const index = path.join(ASSETS_DIR, 'frontend/dist/index.html');
   if (fs.existsSync(index)) {
     res.sendFile(index);
   } else {
