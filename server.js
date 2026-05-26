@@ -1,11 +1,18 @@
+#!/usr/bin/env node
 import express from 'express';
+import { createServer as createHttpServer } from 'http';
 import { spawn, spawnSync, execSync } from 'child_process';
 import { createServer } from 'net';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { networkInterfaces, homedir } from 'os';
 import multer from 'multer';
+import { WebSocketServer } from 'ws';
 import { getSyncStatus, listAgentSessions, saveSyncConfig, startSessionSyncLoop } from './agentSessionSync.js';
+import { spawnPty, writePty, resizePty, capturePty, subscribePty, killPty, isPtyAlive } from './pty-manager.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = 4242;
@@ -36,7 +43,7 @@ function broadcast(data) {
   for (const c of sseClients) c.write(msg);
 }
 
-function sanitize({ proc, tmuxSession, ...s }) { return s; }
+function sanitize({ proc, tmuxSession, ptyId, ...s }) { return s; }
 
 function stripAnsi(str) {
   return str
@@ -91,56 +98,40 @@ function isProcessAlive(pid) {
 }
 
 function stopSessionProcess(s, signal = 'SIGTERM') {
-  if (s.tmuxSession) {
-    try { execSync(`tmux kill-session -t ${s.tmuxSession}`, { stdio: 'ignore' }); } catch {}
-  }
+  if (s.ptyId != null) killPty(s.ptyId);
   try {
     if (s.proc) s.proc.kill(signal);
     else if (s.pid) process.kill(s.pid, signal);
   } catch {}
 }
 
-function tmuxCapture(sessionName) {
-  const result = spawnSync('tmux', ['capture-pane', '-p', '-t', sessionName, '-S', '-300'], { encoding: 'utf8' });
-  return result.status === 0 ? stripAnsi(result.stdout || '') : '';
-}
-
 function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd, agent }) {
-  const start = spawnSync('tmux', [
-    'new-session',
-    '-d',
-    '-s',
-    session.tmuxSession,
-    '-c',
-    cwd,
-    `claude --resume '${String(resumeId).replace(/'/g, `'\\''`)}'`,
-  ], { encoding: 'utf8' });
-
-  if (start.status !== 0) {
+  let pid;
+  try {
+    pid = spawnPty(id, agent.nativeBin(), ['--resume', String(resumeId)], { cwd });
+  } catch (e) {
     session.status = 'error';
-    session.log.push(start.stderr || start.stdout || 'Failed to start tmux session');
+    session.log.push(`Failed to start PTY session: ${e.message}`);
+    broadcast({ type: 'session_update', session: sanitize(session) });
     return;
   }
+  session.pid = pid;
+  session.ptyId = id;
 
-  setTimeout(() => {
-    spawnSync('tmux', ['send-keys', '-t', session.tmuxSession, `/remote-control ${remoteName}`, 'Enter']);
-  }, 4000);
+  setTimeout(() => writePty(id, `/remote-control ${remoteName}\r`), 4000);
 
   let attempts = 0;
   const timer = setInterval(() => {
     const s = sessions.get(id);
-    if (!s) {
-      clearInterval(timer);
-      return;
-    }
+    if (!s) { clearInterval(timer); return; }
 
-    const pane = tmuxCapture(s.tmuxSession);
-    if (pane) {
-      s.log = [pane];
+    const output = capturePty(id);
+    if (output) {
+      s.log = [output];
       s.lastActivityAt = Date.now();
     }
 
-    const match = pane.match(agent.urlPattern);
+    const match = output.match(agent.urlPattern);
     if (match) {
       s.url = match[0].replace(/[.,;:)\]]+$/, '');
       s.status = 'running';
@@ -150,10 +141,9 @@ function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd
     }
 
     attempts += 1;
-    const tmuxAlive = spawnSync('tmux', ['has-session', '-t', s.tmuxSession], { stdio: 'ignore' }).status === 0;
-    if (!tmuxAlive || attempts > 30) {
+    if (!isPtyAlive(id) || attempts > 60) {
       s.status = 'error';
-      if (!pane) s.log.push('Claude resume remote-control did not produce a URL.');
+      if (!output) s.log.push('Claude resume did not produce a URL within timeout.');
       broadcast({ type: 'session_update', session: sanitize(s) });
       clearInterval(timer);
       return;
@@ -164,48 +154,7 @@ function startClaudeResumeRemoteSession({ id, session, resumeId, remoteName, cwd
 }
 
 function recoverTtydSessions() {
-  let output = '';
-  try {
-    output = execSync('ps -eo pid=,args=', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-  } catch {
-    return;
-  }
-
-  const ip = getLocalIPs()[0] || 'localhost';
-  for (const line of output.split('\n')) {
-    if (!line.includes('ttyd ') || !line.includes(' -p ')) continue;
-    if (!line.includes(' codex') && !line.includes(' claude')) continue;
-
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    const args = match[2].split(/\s+/);
-    const port = args[args.indexOf('-p') + 1];
-    const tmuxSession = args.includes('-s') ? args[args.indexOf('-s') + 1] : null;
-    if (!tmuxSession) continue;
-    if (!port || [...sessions.values()].some(s => s.pid === pid || s.url === `http://${ip}:${port}`)) continue;
-
-    const tool = args.includes('claude') ? 'claude' : 'codex';
-    const cwd = args.includes('-c')
-      ? args[args.indexOf('-c') + 1]
-      : args.includes('-w')
-        ? args[args.indexOf('-w') + 1]
-        : HOME;
-    const id = nextId++;
-    sessions.set(id, {
-      id,
-      tool,
-      name: `Recovered ${AGENTS[tool]?.label || tool}`,
-      cwd,
-      status: 'running',
-      url: `http://${ip}:${port}`,
-      mode: 'ttyd',
-      tmuxSession,
-      pid,
-      log: [`Recovered existing ttyd process ${pid} on port ${port}`],
-      startedAt: Date.now(),
-    });
-  }
+  // PTY sessions live in-process — nothing to recover after a server restart.
 }
 
 let stopCurrentRelay = null;
@@ -481,7 +430,7 @@ self.addEventListener('activate', event => {
 });
 `);
 });
-app.use(express.static(path.join(process.cwd(), 'frontend/dist')));
+app.use(express.static(path.join(__dirname, 'frontend/dist')));
 
 app.get('/api/agents', (_req, res) => {
   res.json(Object.values(AGENTS).map(a => ({
@@ -641,73 +590,67 @@ app.post('/api/sessions', async (req, res) => {
     }
   }
 
-  let cmd, args, mode, immediateUrl, tmuxSession = null;
-
+  // ── Native Claude resume — run in a PTY so we can send /remote-control ──
   if (resumeId && tool === 'claude' && agent.nativeAvailable()) {
-    if (!which('tmux')) {
-      return res.status(503).json({ error: 'tmux not found — install it to resume Claude sessions into Remote Control' });
-    }
     const id = nextId++;
-    tmuxSession = `lp-claude-${Date.now()}-${id}`;
     const session = {
-      id,
-      tool,
+      id, tool,
       name: name || `Resume ${String(resumeId).slice(0, 8)}`,
-      cwd: workDir,
-      status: 'starting',
-      url: null,
-      mode: 'native',
-      tmuxSession,
-      pid: 0,
-      log: [`Starting Claude resume ${resumeId} and attaching /remote-control...\n`],
-      startedAt: Date.now(),
-      lastActivityAt: Date.now(),
+      cwd: workDir, status: 'starting', url: null, mode: 'native',
+      ptyId: id, pid: 0, log: [`Starting Claude resume ${resumeId}…\n`],
+      startedAt: Date.now(), lastActivityAt: Date.now(),
     };
     sessions.set(id, session);
     startClaudeResumeRemoteSession({
-      id,
-      session,
-      resumeId,
+      id, session, resumeId,
       remoteName: name || `Resume ${String(resumeId).slice(0, 8)}`,
-      cwd: workDir,
-      agent,
+      cwd: workDir, agent,
     });
     res.json(sanitize(session));
     return;
-  } else if (resumeId) {
-    if (!which('ttyd')) {
-      return res.status(503).json({ error: 'ttyd not found — install it to resume stored sessions' });
-    }
-    const port = await getFreePort();
-    const ip = getLocalIPs()[0] || 'localhost';
-    tmuxSession = `lp-${Date.now()}-${nextId}`;
-    cmd = 'ttyd';
-    const resumeArgs = tool === 'codex' ? ['resume', String(resumeId)] : ['--resume', String(resumeId)];
-    args = ['-p', String(port), '-W', '-t', 'fontSize=16',
-            'tmux', 'new-session', '-A', '-s', tmuxSession, '-c', workDir, agent.binary, ...resumeArgs];
-    mode = 'ttyd';
-    immediateUrl = `http://${ip}:${port}`;
-  } else if (agent.nativeAvailable()) {
-    cmd = agent.nativeBin();
-    args = agent.nativeArgs(name);
-    mode = 'native';
-  } else {
-    if (!which('ttyd')) {
-      return res.status(503).json({ error: 'ttyd not found — install it to use the terminal fallback' });
-    }
-    const port = await getFreePort();
-    const ip = getLocalIPs()[0] || 'localhost';
-    // Wrap in tmux so closing the browser tab detaches rather than killing the
-    // agent. Reconnecting to the same URL reattaches to the running session.
-    tmuxSession = `lp-${Date.now()}-${nextId}`;
-    cmd = 'ttyd';
-    args = ['-p', String(port), '-W', '-t', 'fontSize=16',
-            'tmux', 'new-session', '-A', '-s', tmuxSession, '-c', workDir, agent.binary];
-    mode = 'ttyd';
-    immediateUrl = `http://${ip}:${port}`;
   }
 
+  // ── Terminal (browser) session — PTY streamed via WebSocket terminal ──
+  if (resumeId || !agent.nativeAvailable()) {
+    const id = nextId++;
+    const ip = getLocalIPs()[0] || 'localhost';
+    const termUrl = `http://${ip}:${PORT}/terminal/${id}`;
+    const resumeArgs = resumeId
+      ? (tool === 'codex' ? ['resume', String(resumeId)] : ['--resume', String(resumeId)])
+      : [];
+
+    if (tool === 'codex') {
+      codexSessionCount++;
+      if (codexSessionCount === 1) setCodexProxyConfig(true);
+    }
+
+    let pid = 0;
+    try {
+      pid = spawnPty(id, agent.binary, resumeArgs, {
+        cwd: workDir, env: { TERM: 'xterm-256color' },
+      });
+    } catch (e) {
+      return res.status(500).json({ error: `Failed to spawn PTY: ${e.message}` });
+    }
+
+    const session = {
+      id, tool, name: name || `${agent.label} #${id}`,
+      cwd: workDir, status: 'running', url: termUrl, mode: 'ttyd',
+      ptyId: id, pid,
+      log: [`PTY terminal started — open ${termUrl} to interact\n`],
+      startedAt: Date.now(), lastActivityAt: Date.now(),
+    };
+    sessions.set(id, session);
+    broadcast({ type: 'session_update', session: sanitize(session) });
+    res.json(sanitize(session));
+    return;
+  }
+
+  // ── Native mode — spawn directly, pipe stdout/stderr ──
   const id = nextId++;
+  const cmd = agent.nativeBin();
+  const args = agent.nativeArgs(name);
+  const mode = 'native';
 
   if (tool === 'codex') {
     codexSessionCount++;
@@ -716,29 +659,15 @@ app.post('/api/sessions', async (req, res) => {
 
   const proc = spawn(cmd, args, {
     cwd: workDir,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      // Strip color codes in native mode so the log buffer stays readable;
-      // in ttyd mode the terminal handles rendering so leave colors intact.
-      ...(mode === 'native' ? { FORCE_COLOR: '0', NO_COLOR: '1' } : {}),
-    },
+    env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '0', NO_COLOR: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   const session = {
-    id,
-    tool,
-    name: name || `${agent.label} #${id}`,
-    cwd: workDir,
-    status: immediateUrl ? 'running' : 'starting',
-    url: immediateUrl ?? null,
-    mode,
-    tmuxSession: mode === 'ttyd' ? tmuxSession : null,
-    pid: proc.pid,
-    log: [],
-    startedAt: Date.now(),
-    lastActivityAt: Date.now(),
+    id, tool, name: name || `${agent.label} #${id}`,
+    cwd: workDir, status: 'starting', url: null, mode,
+    pid: proc.pid, log: [],
+    startedAt: Date.now(), lastActivityAt: Date.now(),
   };
 
   sessions.set(id, { ...session, proc });
@@ -752,34 +681,17 @@ app.post('/api/sessions', async (req, res) => {
     s.log.push(text);
     if (s.log.length > 300) s.log.shift();
 
-    // For native mode, scan output for the session URL.
-    // Agents that emit JSON (codex --json) get their url field extracted;
-    // agents that print a plain URL are caught by the regex.
-    if (!s.url && mode === 'native') {
+    if (!s.url) {
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-
-        // Try JSON first (e.g. codex remote-control start --json)
         try {
           const json = JSON.parse(trimmed);
           const url = json.url || json.relay_url || json.connection_url;
-          if (url) {
-            s.url = url;
-            s.status = 'running';
-            broadcast({ type: 'session_update', session: sanitize(s) });
-            return;
-          }
+          if (url) { s.url = url; s.status = 'running'; broadcast({ type: 'session_update', session: sanitize(s) }); return; }
         } catch {}
-
-        // Plain URL fallback
         const match = trimmed.match(agent.urlPattern);
-        if (match) {
-          s.url = match[0].replace(/[.,;:)\]]+$/, '');
-          s.status = 'running';
-          broadcast({ type: 'session_update', session: sanitize(s) });
-          return;
-        }
+        if (match) { s.url = match[0].replace(/[.,;:)\]]+$/, ''); s.status = 'running'; broadcast({ type: 'session_update', session: sanitize(s) }); return; }
       }
     }
 
@@ -791,11 +703,7 @@ app.post('/api/sessions', async (req, res) => {
 
   proc.on('error', (err) => {
     const s = sessions.get(id);
-    if (s) {
-      s.status = 'error';
-      s.log.push(`Error: ${err.message}`);
-      broadcast({ type: 'session_update', session: sanitize(s) });
-    }
+    if (s) { s.status = 'error'; s.log.push(`Error: ${err.message}`); broadcast({ type: 'session_update', session: sanitize(s) }); }
   });
 
   proc.on('exit', (code) => {
@@ -804,11 +712,7 @@ app.post('/api/sessions', async (req, res) => {
       if (codexSessionCount === 0) setCodexProxyConfig(false);
     }
     const s = sessions.get(id);
-    if (s) {
-      s.status = 'stopped';
-      s.exitCode = code;
-      broadcast({ type: 'session_update', session: sanitize(s) });
-    }
+    if (s) { s.status = 'stopped'; s.exitCode = code; broadcast({ type: 'session_update', session: sanitize(s) }); }
   });
 
   res.json(sanitize(session));
@@ -900,10 +804,16 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => sseClients.delete(res));
 });
 
+// ── Built-in terminal (replaces ttyd) ─────────────────────────────────────
+
+app.get('/terminal/:id', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'terminal.html'));
+});
+
 // ── SPA fallback ──────────────────────────────────────────────────────────
 
 app.get('*', (_req, res) => {
-  const index = path.join(process.cwd(), 'frontend/dist/index.html');
+  const index = path.join(__dirname, 'frontend/dist/index.html');
   if (fs.existsSync(index)) {
     res.sendFile(index);
   } else {
@@ -928,9 +838,40 @@ setInterval(() => {
   }
 }, 2 * 60 * 1000);
 
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = createHttpServer(app);
+
+// ── WebSocket terminal ─────────────────────────────────────────────────────
+
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on('upgrade', (req, socket, head) => {
+  if (req.url.startsWith('/ws/terminal/')) {
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+  } else {
+    socket.destroy();
+  }
+});
+
+wss.on('connection', (ws, req) => {
+  const sessionId = Number(req.url.split('/').pop());
+  const unsub = subscribePty(sessionId, data => {
+    if (ws.readyState === 1) ws.send(data);
+  });
+  ws.on('message', msg => {
+    const text = msg.toString();
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.type === 'resize') { resizePty(sessionId, parsed.cols, parsed.rows); return; }
+    } catch {}
+    writePty(sessionId, text);
+  });
+  ws.on('close', unsub);
+  ws.on('error', unsub);
+});
+
+httpServer.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();
-  console.log(`\nLaunchpad ready:`);
+  console.log(`\nBeeZee ready:`);
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const ip of ips) console.log(`  Network: http://${ip}:${PORT}`);
   if (relayConfig.url && relayConfig.token) console.log(`  Relay:   ${relayConfig.url} (${relayConfig.nodeId})`);

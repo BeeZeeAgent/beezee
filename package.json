@@ -1,13 +1,32 @@
 {
-  "name": "launchpad-server",
-  "version": "1.0.0",
+  "name": "beezee",
+  "version": "0.1.0",
+  "description": "Launch and manage Claude Code and Codex sessions from any device",
   "type": "module",
+  "bin": {
+    "beezee": "./server.js"
+  },
+  "files": [
+    "server.js",
+    "agentSessionSync.js",
+    "pty-manager.js",
+    "terminal.html",
+    "frontend/dist"
+  ],
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "build": "cd frontend && npm run build"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "multer": "^2.1.1"
-  }
+    "multer": "^2.1.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.0"
+  },
+  "keywords": ["claude", "codex", "ai", "session", "launcher"],
+  "license": "MIT"
 }

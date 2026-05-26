@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BeeZee Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #09090b; overflow: hidden; }
+    #terminal { height: 100dvh; }
+    #status {
+      position: fixed; bottom: 8px; right: 12px;
+      font: 11px/1 monospace; color: #52525b; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <div id="status">connecting…</div>
+  <script>
+    const sessionId = window.location.pathname.split('/').pop();
+    const status = document.getElementById('status');
+
+    const term = new Terminal({
+      theme: {
+        background: '#09090b', foreground: '#e4e4e7',
+        cursor: '#FFE566', selectionBackground: '#3f3f46',
+      },
+      fontFamily: 'Menlo, "Fira Code", "Cascadia Code", monospace',
+      fontSize: 14,
+      lineHeight: 1.2,
+      cursorBlink: true,
+      scrollback: 5000,
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${proto}://${location.host}/ws/terminal/${sessionId}`;
+    let ws;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        status.textContent = 'connected';
+        sendResize();
+      };
+
+      ws.onmessage = ({ data }) => {
+        if (data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(data));
+        } else {
+          term.write(data);
+        }
+      };
+
+      ws.onclose = () => { status.textContent = 'disconnected — reload to reconnect'; };
+      ws.onerror = () => { status.textContent = 'connection error'; };
+    }
+
+    function sendResize() {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    }
+
+    term.onData(data => {
+      if (ws && ws.readyState === 1) ws.send(data);
+    });
+
+    window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
+
+    connect();
+  </script>
+</body>
+</html>
