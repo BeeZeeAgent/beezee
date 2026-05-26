@@ -62,7 +62,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
         <div className="flex min-w-0 items-start gap-3 p-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1 min-w-0 overflow-hidden">
-              <span className="min-w-0 max-w-full flex-1 basis-24 truncate text-sm font-medium">{session.name}</span>
+              <span className="flex-1 min-w-0 truncate text-sm font-medium">{session.name}</span>
               <span className={cn(
                 "shrink-0 text-xs px-1.5 py-0.5 rounded-full border font-medium",
                 STATUS_COLORS[session.status]
@@ -89,7 +89,7 @@ export function SessionCard({ session, onRemove }: SessionCardProps) {
                   terminal
                 </Badge>
               )}
-              <span className="min-w-0 flex-1 basis-32 truncate text-xs text-muted-foreground">{session.cwd}</span>
+              <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">{session.cwd}</span>
               <span className="text-xs text-muted-foreground shrink-0">{elapsedStr}</span>
             </div>
           </div>
