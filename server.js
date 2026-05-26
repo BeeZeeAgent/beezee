@@ -20,7 +20,7 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   ? path.dirname(process.execPath)
   : __dirname;
 
-const BEEZEE_VERSION = '0.4.0';
+const BEEZEE_VERSION = '0.4.1';
 const GITHUB_REPO = 'BeeZeeAgent/beezee';
 
 // ── CLI subcommands (runs before server starts) ────────────────────────────
@@ -37,60 +37,139 @@ if (subcmd === 'update') {
   process.exit(0);
 }
 
-async function runUpdate() {
+function parseVersion(version) {
+  return String(version || '')
+    .replace(/^v/, '')
+    .split('.')
+    .map(part => Number.parseInt(part, 10) || 0);
+}
+
+function compareVersions(a, b) {
+  const av = parseVersion(a);
+  const bv = parseVersion(b);
+  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+    const diff = (av[i] || 0) - (bv[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function getUpdateAssetName(platform = process.platform, arch = process.arch) {
+  const platformName = platform === 'win32' ? 'windows' : platform;
+  return `beezee-${platformName}-${arch}${platform === 'win32' ? '.exe' : ''}`;
+}
+
+async function fetchLatestRelease() {
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+    headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` },
+  });
+  if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+  return res.json();
+}
+
+function updateInfoFromRelease(release) {
   const platform = process.platform; // linux, darwin, win32
   const arch = process.arch;         // arm64, x64
-  const assetName = `beezee-${platform}-${arch}${platform === 'win32' ? '.exe' : ''}`;
+  const assetName = getUpdateAssetName(platform, arch);
+  const latest = release.tag_name?.replace(/^v/, '');
+  const asset = release.assets?.find(a => a.name === assetName) || null;
+
+  return {
+    currentVersion: BEEZEE_VERSION,
+    latestVersion: latest || null,
+    updateAvailable: !!latest && compareVersions(latest, BEEZEE_VERSION) > 0,
+    releaseUrl: release.html_url || null,
+    releaseName: release.name || release.tag_name || null,
+    assetName,
+    assetSize: asset?.size || null,
+    assetUrl: asset?.browser_download_url || null,
+    canAutoUpdate: !!asset,
+  };
+}
+
+async function downloadUpdateAsset(assetUrl) {
+  const dlRes = await fetch(assetUrl, { headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` } });
+  if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+  return Buffer.from(await dlRes.arrayBuffer());
+}
+
+function installUpdateBuffer(buf, latest) {
+  const dest = process.execPath;
+  const tmp = `${dest}.new`;
+  fs.writeFileSync(tmp, buf);
+  fs.chmodSync(tmp, 0o755);
+
+  if (process.platform !== 'win32') {
+    fs.renameSync(tmp, dest);
+    return {
+      restartRequired: true,
+      message: `Updated to ${latest}. Restart BeeZee to apply.`,
+    };
+  }
+
+  const scriptPath = path.join(homedir(), `beezee-update-${Date.now()}.cmd`);
+  fs.writeFileSync(scriptPath, [
+    '@echo off',
+    'setlocal',
+    'timeout /t 2 /nobreak >NUL',
+    `move /Y "${tmp}" "${dest}" >NUL`,
+    `start "" "${dest}"`,
+    `del "%~f0"`,
+  ].join('\r\n'));
+
+  const child = spawn('cmd.exe', ['/c', scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+
+  setTimeout(() => process.exit(0), 500);
+  return {
+    restartRequired: false,
+    message: `Updated to ${latest}. BeeZee will restart automatically.`,
+  };
+}
+
+async function runUpdate() {
 
   console.log(`BeeZee ${BEEZEE_VERSION} — checking for updates...`);
 
   let release;
   try {
-    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-      headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` },
-    });
-    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-    release = await res.json();
+    release = await fetchLatestRelease();
   } catch (err) {
     console.error(`Failed to fetch release info: ${err.message}`);
     process.exit(1);
   }
 
-  const latest = release.tag_name?.replace(/^v/, '');
+  const info = updateInfoFromRelease(release);
+  const latest = info.latestVersion;
   if (!latest) { console.error('Could not parse release tag.'); process.exit(1); }
 
-  if (latest === BEEZEE_VERSION) {
+  if (!info.updateAvailable) {
     console.log(`Already up to date (${BEEZEE_VERSION}).`);
     return;
   }
 
-  const asset = release.assets?.find(a => a.name === assetName);
-  if (!asset) {
-    console.error(`No binary for ${assetName} in release ${release.tag_name}.`);
+  if (!info.assetUrl) {
+    console.error(`No binary for ${info.assetName} in release ${release.tag_name}.`);
     console.error(`Available: ${(release.assets || []).map(a => a.name).join(', ')}`);
     process.exit(1);
   }
 
-  console.log(`Downloading ${BEEZEE_VERSION} → ${latest} (${(asset.size / 1024 / 1024).toFixed(1)} MB)...`);
+  console.log(`Downloading ${BEEZEE_VERSION} → ${latest} (${(info.assetSize / 1024 / 1024).toFixed(1)} MB)...`);
 
-  const dest = process.execPath;
-  const tmp = `${dest}.new`;
-
-  let dlRes;
+  let buf;
   try {
-    dlRes = await fetch(asset.browser_download_url, { headers: { 'User-Agent': `beezee/${BEEZEE_VERSION}` } });
-    if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+    buf = await downloadUpdateAsset(info.assetUrl);
   } catch (err) {
     console.error(`Download error: ${err.message}`);
     process.exit(1);
   }
 
-  const buf = Buffer.from(await dlRes.arrayBuffer());
-  fs.writeFileSync(tmp, buf);
-  fs.chmodSync(tmp, 0o755);
-  fs.renameSync(tmp, dest);
-
-  console.log(`Updated to ${latest}. Restart BeeZee to apply.`);
+  const result = installUpdateBuffer(buf, latest);
+  console.log(result.message);
 }
 
 if (subcmd === 'service') {
@@ -860,6 +939,35 @@ app.get('/api/agents', (_req, res) => {
 });
 
 app.get('/api/home', (req, res) => res.json({ home: HOME }));
+
+app.get('/api/update/check', async (_req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    res.json(updateInfoFromRelease(release));
+  } catch (err) {
+    res.status(502).json({
+      error: err.message,
+      currentVersion: BEEZEE_VERSION,
+      updateAvailable: false,
+    });
+  }
+});
+
+app.post('/api/update/apply', async (_req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    const info = updateInfoFromRelease(release);
+    if (!info.latestVersion) return res.status(502).json({ error: 'Could not parse release tag.' });
+    if (!info.updateAvailable) return res.json({ ok: true, updated: false, message: `Already up to date (${BEEZEE_VERSION}).` });
+    if (!info.assetUrl) return res.status(404).json({ error: `No binary for ${info.assetName} in ${info.releaseName || 'latest release'}.` });
+
+    const buf = await downloadUpdateAsset(info.assetUrl);
+    const result = installUpdateBuffer(buf, info.latestVersion);
+    res.json({ ok: true, updated: true, latestVersion: info.latestVersion, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.next', 'dist', 'build', 'out',
   'target', '.cargo', 'vendor', 'venv', '.venv', 'env', '.tox', 'coverage', '.nyc_output']);

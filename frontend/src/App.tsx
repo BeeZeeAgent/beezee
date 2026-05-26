@@ -4,6 +4,7 @@ import { FileBrowser } from "@/components/FileBrowser";
 import { Sessions } from "@/components/Sessions";
 import { Usage } from "@/components/Usage";
 import { PairDialog } from "@/components/PairDialog";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { Toaster } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +43,7 @@ export default function App() {
         <img src="/beezee-logo.svg" alt="BeeZee" className="h-7 w-7 mr-2" />
         <h1 className="font-semibold tracking-tight">BeeZee</h1>
       </header>
+      <UpdateBanner />
 
       {/* Main content */}
       <main className="min-w-0 flex-1 overflow-hidden flex flex-col">

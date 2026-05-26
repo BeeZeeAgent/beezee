@@ -84,11 +84,39 @@ export interface SessionSyncStatus {
   mirrors: number;
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  assetName: string;
+  assetSize: number | null;
+  assetUrl: string | null;
+  canAutoUpdate: boolean;
+  error?: string;
+}
+
+export interface UpdateApplyResult {
+  ok: boolean;
+  updated: boolean;
+  latestVersion?: string;
+  restartRequired?: boolean;
+  message: string;
+  error?: string;
+}
+
 const BASE = import.meta.env.DEV ? "http://localhost:4242" : "";
 
 export const api = {
   getHome: (): Promise<{ home: string }> =>
     fetch(`${BASE}/api/home`).then(r => r.json()),
+
+  checkUpdate: (): Promise<UpdateInfo> =>
+    fetch(`${BASE}/api/update/check`).then(r => r.json()),
+
+  applyUpdate: (): Promise<UpdateApplyResult> =>
+    fetch(`${BASE}/api/update/apply`, { method: "POST" }).then(r => r.json()),
 
   browse: (path: string, hidden = false): Promise<BrowseResult> =>
     fetch(`${BASE}/api/browse?path=${encodeURIComponent(path)}&hidden=${hidden}`).then(r => r.json()),
