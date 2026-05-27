@@ -1391,12 +1391,6 @@ app.post('/api/sessions', async (req, res) => {
     if (codexSessionCount === 1) setCodexProxyConfig(true);
   }
 
-  const proc = spawn(cmd, args, {
-    cwd: workDir,
-    env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '0', NO_COLOR: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
   const session = {
     id, tool, name: name || `${agent.label} #${id}`,
     cwd: workDir, status: 'starting', url: null, mode,
