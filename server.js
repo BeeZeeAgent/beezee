@@ -1358,8 +1358,15 @@ setInterval(() => {
   }
 }, 2 * 60 * 1000);
 
-const httpServer = createHttpServer(app);
+// Exit cleanly if port is taken (bun runs the binary during --compile to verify it)
+await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.once('error', err => err.code === 'EADDRINUSE' ? process.exit(0) : reject(err));
+  probe.once('listening', () => probe.close(resolve));
+  probe.listen(PORT, '127.0.0.1');
+});
 
+const httpServer = createHttpServer(app);
 httpServer.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();
   console.log(`\nBeeZee ready:`);
