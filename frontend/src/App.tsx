@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
-import { FolderOpen, Layers, BarChart2 } from "lucide-react";
+import { FolderOpen, Layers, BarChart2, Wrench } from "lucide-react";
 import { FileBrowser } from "@/components/FileBrowser";
 import { Sessions } from "@/components/Sessions";
 import { Usage } from "@/components/Usage";
+import { Tools } from "@/components/Tools";
 import { PairDialog } from "@/components/PairDialog";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Toaster } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
 
-type Tab = "browse" | "sessions" | "usage";
+type Tab = "browse" | "sessions" | "usage" | "tools";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("browse");
@@ -34,6 +35,7 @@ export default function App() {
     { id: "browse" as Tab, label: "Browse", icon: FolderOpen },
     { id: "sessions" as Tab, label: "Sessions", icon: Layers },
     { id: "usage" as Tab, label: "Usage", icon: BarChart2 },
+    { id: "tools" as Tab, label: "Tools", icon: Wrench },
   ];
 
   return (
@@ -50,10 +52,11 @@ export default function App() {
         {tab === "browse" && <FileBrowser onLaunch={handleLaunch} />}
         {tab === "sessions" && <Sessions launchDir={launchDir} />}
         {tab === "usage" && <Usage />}
+        {tab === "tools" && <Tools />}
       </main>
 
       {/* Bottom nav */}
-      <nav className="border-t bg-card grid grid-cols-3 safe-pb">
+      <nav className="border-t bg-card grid grid-cols-4 safe-pb">
         {NAV.map(({ id, label, icon: Icon }) => (
           <button
             key={id}

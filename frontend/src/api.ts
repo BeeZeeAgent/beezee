@@ -106,6 +106,37 @@ export interface UpdateApplyResult {
   error?: string;
 }
 
+export interface CliToolStatus {
+  name: string;
+  path: string | null;
+  installed: boolean;
+}
+
+export interface McpServer {
+  name: string;
+  type: "http" | "stdio" | string;
+  url: string | null;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  inCodex: boolean;
+  inClaude: boolean;
+  claudeStatus: string | null;
+  canSyncToCodex: boolean;
+  canSyncToClaude: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface ToolsInventory {
+  updatedAt: string;
+  configFiles: {
+    codex: string;
+    claude: string;
+  };
+  cliTools: CliToolStatus[];
+  mcpServers: McpServer[];
+}
+
 const BASE = import.meta.env.DEV ? "http://localhost:4242" : "";
 
 export const api = {
@@ -164,6 +195,28 @@ export const api = {
 
   getUsage: (): Promise<UsageData> =>
     fetch(`${BASE}/api/usage`).then(r => r.json()),
+
+  getTools: (): Promise<ToolsInventory> =>
+    fetch(`${BASE}/api/tools`).then(r => r.json()),
+
+  saveMcpServer: (payload: {
+    target: "codex" | "claude" | "both";
+    name: string;
+    type?: string;
+    url?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }): Promise<{ ok: boolean; tools: ToolsInventory }> =>
+    fetch(`${BASE}/api/tools/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Failed to save MCP server");
+      return data;
+    }),
 
   upload: (dest: string, files: File[], relativePaths: string[]): Promise<{ ok: boolean; count: number }> => {
     const form = new FormData();

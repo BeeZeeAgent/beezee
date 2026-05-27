@@ -20,7 +20,7 @@ const ASSETS_DIR = __dirname.startsWith('/$bunfs')
   ? path.dirname(process.execPath)
   : __dirname;
 
-const BEEZEE_VERSION = '0.4.2';
+const BEEZEE_VERSION = '0.5.0';
 const GITHUB_REPO = 'BeeZeeAgent/beezee';
 
 // ── CLI subcommands (runs before server starts) ────────────────────────────
@@ -369,6 +369,194 @@ const IS_WIN = process.platform === 'win32';
 function which(bin) {
   const cmd = IS_WIN ? `where "${bin}"` : `which ${bin}`;
   try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).toString().trim().split(/\r?\n/)[0] || null; } catch { return null; }
+}
+
+function readJsonFile(file, fallback = null) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function tomlArray(values = []) {
+  return `[${values.map(tomlString).join(', ')}]`;
+}
+
+function tomlTableKey(name) {
+  return /^[A-Za-z0-9_-]+$/.test(name) ? name : tomlString(name);
+}
+
+function parseTomlValue(value) {
+  const trimmed = value.trim();
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (trimmed.startsWith('[')) {
+    try { return JSON.parse(trimmed); } catch { return []; }
+  }
+  if (trimmed.startsWith('"')) {
+    try { return JSON.parse(trimmed); } catch { return trimmed.slice(1, -1); }
+  }
+  return trimmed;
+}
+
+function parseCodexMcpConfig() {
+  const file = path.join(HOME, '.codex', 'config.toml');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return { file, servers: {} }; }
+
+  const servers = {};
+  let current = null;
+  let inEnv = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const section = line.match(/^\[mcp_servers\.(?:"([^"]+)"|([^\].]+))(?:\.(env))?\]$/);
+    if (section) {
+      const name = section[1] || section[2];
+      current = servers[name] ||= { name, source: 'codex', config: {}, env: {} };
+      inEnv = section[3] === 'env';
+      continue;
+    }
+    if (line.startsWith('[')) {
+      current = null;
+      inEnv = false;
+      continue;
+    }
+    if (!current) continue;
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!kv) continue;
+    if (inEnv) current.env[kv[1]] = parseTomlValue(kv[2]);
+    else current.config[kv[1]] = parseTomlValue(kv[2]);
+  }
+
+  return { file, servers };
+}
+
+function normalizeMcpConfig(name, raw = {}) {
+  const config = { name };
+  if (raw.url) {
+    config.type = raw.type || 'http';
+    config.url = raw.url;
+  } else {
+    config.type = raw.type || 'stdio';
+    config.command = raw.command || '';
+    config.args = Array.isArray(raw.args) ? raw.args : [];
+  }
+  config.env = raw.env && typeof raw.env === 'object' ? raw.env : {};
+  if (raw.headers && typeof raw.headers === 'object') config.headers = raw.headers;
+  if (raw.bearer_token_env_var) config.bearer_token_env_var = raw.bearer_token_env_var;
+  if (raw.enabled !== undefined) config.enabled = raw.enabled !== false;
+  return config;
+}
+
+function parseClaudeMcpConfig() {
+  const file = path.join(HOME, '.claude.json');
+  const data = readJsonFile(file, {});
+  const servers = {};
+  for (const [name, raw] of Object.entries(data.mcpServers || data.mcp_servers || {})) {
+    servers[name] = { name, source: 'claude', config: normalizeMcpConfig(name, raw) };
+  }
+  return { file, servers };
+}
+
+function listClaudeMcpCliServers() {
+  const claude = which('claude');
+  if (!claude) return [];
+  const out = spawnSync(claude, ['mcp', 'list'], { encoding: 'utf8', timeout: 7000, windowsHide: true });
+  const text = `${out.stdout || ''}\n${out.stderr || ''}`;
+  return text.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/Checking MCP server health|No MCP servers configured/i.test(line))
+    .map(line => {
+      const match = line.match(/^(.+?):\s+(\S+)(?:\s+-\s+(.+))?$/);
+      if (!match) return null;
+      return { name: match[1], url: match[2], status: match[3] || 'configured' };
+    })
+    .filter(Boolean);
+}
+
+function getMcpInventory() {
+  const codex = parseCodexMcpConfig();
+  const claude = parseClaudeMcpConfig();
+  const cliClaude = listClaudeMcpCliServers();
+  const names = new Set([...Object.keys(codex.servers), ...Object.keys(claude.servers), ...cliClaude.map(s => s.name)]);
+  const mcpServers = [...names].sort((a, b) => a.localeCompare(b)).map(name => {
+    const codexEntry = codex.servers[name];
+    const claudeEntry = claude.servers[name];
+    const cliEntry = cliClaude.find(s => s.name === name);
+    const config = normalizeMcpConfig(name, codexEntry?.config || claudeEntry?.config || cliEntry || {});
+    if (codexEntry?.env && Object.keys(codexEntry.env).length) config.env = codexEntry.env;
+    return {
+      name,
+      type: config.url ? 'http' : 'stdio',
+      url: config.url || null,
+      command: config.command || null,
+      args: config.args || [],
+      env: config.env || {},
+      inCodex: !!codexEntry,
+      inClaude: !!claudeEntry || !!cliEntry,
+      claudeStatus: cliEntry?.status || null,
+      canSyncToCodex: !!(config.url || config.command),
+      canSyncToClaude: !!(config.url || config.command),
+      config,
+    };
+  });
+
+  const cliTools = ['codex', 'claude', 'node', 'npm', 'npx', 'bun', 'python3', 'uvx', 'git']
+    .map(name => ({ name, path: which(name), installed: !!which(name) }));
+
+  return {
+    updatedAt: new Date().toISOString(),
+    configFiles: { codex: codex.file, claude: claude.file },
+    cliTools,
+    mcpServers,
+  };
+}
+
+function removeCodexMcpBlock(text, name) {
+  const key = tomlTableKey(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const quoted = tomlString(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`\\n?\\[mcp_servers\\.(?:${key}|${quoted})\\][\\s\\S]*?(?=\\n\\[[^\\n]+\\]|$)`, 'g');
+  return text.replace(pattern, '').trimEnd();
+}
+
+function writeCodexMcpServer(server) {
+  const file = path.join(HOME, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch {}
+  text = removeCodexMcpBlock(text, server.name);
+  const key = tomlTableKey(server.name);
+  const lines = ['', `[mcp_servers.${key}]`];
+  if (server.url) {
+    lines.push(`url = ${tomlString(server.url)}`);
+    if (server.bearer_token_env_var) lines.push(`bearer_token_env_var = ${tomlString(server.bearer_token_env_var)}`);
+  } else {
+    lines.push(`command = ${tomlString(server.command)}`);
+    lines.push(`args = ${tomlArray(server.args || [])}`);
+  }
+  lines.push('enabled = true');
+  if (server.env && Object.keys(server.env).length) {
+    lines.push('', `[mcp_servers.${key}.env]`);
+    for (const [k, v] of Object.entries(server.env)) lines.push(`${k} = ${tomlString(v)}`);
+  }
+  fs.writeFileSync(file, `${text}${lines.join('\n')}\n`);
+}
+
+function writeClaudeMcpServer(server) {
+  const claude = which('claude');
+  if (!claude) throw new Error('Claude Code CLI is not installed');
+  const args = ['mcp', 'add', '--scope', 'user'];
+  if (server.url) {
+    args.push('--transport', server.type === 'sse' ? 'sse' : 'http', server.name, server.url);
+  } else {
+    args.push('--transport', 'stdio');
+    for (const [k, v] of Object.entries(server.env || {})) args.push('--env', `${k}=${v}`);
+    args.push(server.name, '--', server.command, ...(server.args || []));
+  }
+  const out = spawnSync(claude, args, { encoding: 'utf8', timeout: 15000, windowsHide: true });
+  if (out.status !== 0) throw new Error((out.stderr || out.stdout || 'Claude MCP add failed').trim());
 }
 
 function readUsageStats() {
@@ -939,6 +1127,31 @@ app.get('/api/agents', (_req, res) => {
 });
 
 app.get('/api/home', (req, res) => res.json({ home: HOME }));
+
+app.get('/api/tools', (_req, res) => {
+  try {
+    res.json(getMcpInventory());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tools/mcp', (req, res) => {
+  try {
+    const body = req.body || {};
+    const target = body.target || 'both';
+    const server = normalizeMcpConfig(String(body.name || '').trim(), body);
+    if (!server.name) return res.status(400).json({ error: 'MCP server name is required' });
+    if (!server.url && !server.command) return res.status(400).json({ error: 'Provide either a URL or a command' });
+    if (!['codex', 'claude', 'both'].includes(target)) return res.status(400).json({ error: 'Invalid target' });
+
+    if (target === 'codex' || target === 'both') writeCodexMcpServer(server);
+    if (target === 'claude' || target === 'both') writeClaudeMcpServer(server);
+    res.json({ ok: true, tools: getMcpInventory() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/update/check', async (_req, res) => {
   try {
