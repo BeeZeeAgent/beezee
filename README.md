@@ -23,6 +23,25 @@ BeeZee focuses on the local orchestration side: folders, sessions, remote termin
 ## Vision
 My goal eventually is to build an ecosystem that supports individuals and small businesses to unlock the full potential of the agentic arsenal with keeping their token consumption at bay, which in the current frenzy is kind skimmed over. And I'm convinced that at least a subset of tasks could be achieved with 50-80% less tokens without quality issues.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/browse.png" width="220" alt="Browse" /><br/><sub>Browse folders</sub></td>
+    <td align="center"><img src="docs/screenshots/sessions.png" width="220" alt="Sessions" /><br/><sub>Session list</sub></td>
+    <td align="center"><img src="docs/screenshots/new-session.png" width="220" alt="New session" /><br/><sub>Launch agent</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/usage.png" width="220" alt="Usage" /><br/><sub>Token usage</sub></td>
+    <td align="center"><img src="docs/screenshots/tools.png" width="220" alt="Tools" /><br/><sub>MCP tools</sub></td>
+    <td align="center"><img src="docs/screenshots/terminal.png" width="220" alt="Terminal" /><br/><sub>Remote terminal via relay</sub></td>
+  </tr>
+</table>
+
+**BeeZee Cloud Relay dashboard** — manage instances, view usage, invite members:
+
+<img src="docs/screenshots/relay-dashboard.png" width="700" alt="Cloud Relay dashboard" />
+
 ## Install
 
 Download the latest release for your platform from:
