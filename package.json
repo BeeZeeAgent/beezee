@@ -1,6 +1,6 @@
 {
   "name": "beezee",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "dependencies": {
     "express": "^4.19.2",
     "multer": "^2.1.1",

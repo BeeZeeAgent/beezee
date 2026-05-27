@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ChevronRight, FolderOpen, File, Home, ArrowLeft, Rocket, Search, X, Upload, Files, FolderInput, Loader2 } from "lucide-react";
+import { ChevronRight, FolderOpen, File, ArrowLeft, Rocket, Search, X, Upload, Files, FolderInput, Loader2 } from "lucide-react";
 import { api, type BrowseItem } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,6 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({ onLaunch }: FileBrowserProps) {
-  const [home, setHome] = useState("");
   const [currentPath, setCurrentPath] = useState("");
   const [parent, setParent] = useState("");
   const [items, setItems] = useState<BrowseItem[]>([]);
@@ -50,10 +49,7 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
   }, []);
 
   useEffect(() => {
-    api.getHome().then(({ home: h }) => {
-      setHome(h);
-      navigate(h);
-    }).catch(() => navigate("/"));
+    api.getHome().then(({ home: h }) => navigate(h)).catch(() => navigate("/"));
   }, [navigate]);
 
   useEffect(() => {
@@ -89,7 +85,6 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
     else folderInputRef.current?.click();
   };
 
-  const pathParts = currentPath.split("/").filter(Boolean);
   const isDeepSearch = query.length >= 2;
   const truncPath = (p: string, n = 36) => p.length <= n ? p : "…" + p.slice(-(n - 1));
 
@@ -98,33 +93,6 @@ export function FileBrowser({ onLaunch }: FileBrowserProps) {
       {/* Hidden file inputs */}
       <input ref={filesRef} type="file" multiple hidden onChange={handleUpload} />
       <input ref={(el) => { (folderInputRef as React.MutableRefObject<HTMLInputElement | null>).current = el; folderRef(el); }} type="file" multiple hidden onChange={handleUpload} />
-
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-1 px-4 py-3 border-b overflow-x-auto">
-        <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => navigate(home)}>
-          <Home className="h-3.5 w-3.5" />
-        </Button>
-        {pathParts.map((part, i) => {
-          const fullPath = "/" + pathParts.slice(0, i + 1).join("/");
-          const isLast = i === pathParts.length - 1;
-          return (
-            <div key={fullPath} className="flex items-center gap-1 shrink-0">
-              <ChevronRight className="h-3 w-3 text-muted-foreground" />
-              <button
-                onClick={() => !isLast && navigate(fullPath)}
-                className={cn(
-                  "text-xs px-1 py-0.5 rounded",
-                  isLast
-                    ? "text-foreground font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                )}
-              >
-                {part}
-              </button>
-            </div>
-          );
-        })}
-      </div>
 
       {/* Launch button for current directory */}
       <div className="px-4 py-2 bg-muted/30 border-b flex items-center justify-between gap-3">
