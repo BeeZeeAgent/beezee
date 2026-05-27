@@ -137,6 +137,41 @@ When the node is online, it appears in the relay dashboard. From there you can o
 
 Use Tailscale when you want private-network access and control. Use the BeeZee Cloud Relay when you need browser access from arbitrary devices with team sharing and node-level permissions.
 
+## Self-Hosting the Relay
+
+The relay source lives in `cloud-relay/`. You can run your own instance instead of (or alongside) `https://app.beezyai.net`.
+
+**Requirements:** a Linux server with Docker, and a domain pointing to it.
+
+```bash
+git clone https://github.com/BeeZeeAgent/beezee
+cd beezee/cloud-relay
+cp .env.example .env
+# Edit .env — set PUBLIC_URL, BASE_DOMAIN, and SESSION_SECRET at minimum
+docker compose up -d
+```
+
+Then point your local BeeZee at it:
+
+```bash
+BEEZEE_RELAY_URL=https://relay.yourdomain.com \
+BEEZEE_RELAY_NODE_ID=<node-id> \
+BEEZEE_RELAY_TOKEN=<node-token> \
+./beezee-linux-x64
+```
+
+Key `.env` variables:
+
+| Variable | Description |
+|---|---|
+| `PUBLIC_URL` | Publicly accessible URL of your relay |
+| `BASE_DOMAIN` | Base domain used for per-instance subdomains |
+| `SESSION_SECRET` | Long random string for signing sessions |
+| `DATA_DIR` | Where `store.json` is persisted (default: `./data`) |
+| `STRIPE_*` | Optional — leave blank to disable billing |
+
+The deploy script at `cloud-relay/scripts/deploy.sh` is a zero-downtime helper for deploying to a VPS over SSH. Set `VPS_HOST`, `VPS_PATH`, and `SSH_KEY` in your environment before running it.
+
 ## How It Works
 
 BeeZee scans your local machine and exposes your folder structure through a web UI. It finds available coding harnesses and syncs their sessions so each harness can be used for the same work without manually rebuilding context.
